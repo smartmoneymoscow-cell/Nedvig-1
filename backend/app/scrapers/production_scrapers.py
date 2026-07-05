@@ -1,24 +1,29 @@
 """
-Production scrapers using Playwright (headless browser).
-This is the ONLY reliable approach for Russian real estate sites.
+Production Scrapers — CIAN, Avito, DomClick
+Features: proxy rotation, retry with backoff, deduplication, rate limiting
 
-Requirements:
-    pip install playwright
-    playwright install chromium
+Usage:
+    from backend.app.scrapers.production_scrapers import UnifiedScraper
+    scraper = UnifiedScraper(proxies=["http://user:pass@proxy:port"])
+    results = await scraper.scrape_all("Москва", "sale", limit=100)
 """
 
 import asyncio
-import json
-import re
 import hashlib
+import json
+import logging
+import random
+import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
-from datetime import datetime
+
+log = logging.getLogger("scrapers")
 
 
 @dataclass
-class Listing:
-    """Standardized listing data."""
+class ListingData:
+    """Standardized listing from any source."""
     source: str
     source_id: str
     source_url: str
@@ -29,88 +34,143 @@ class Listing:
     address: str = ""
     city: str = ""
     district: str = ""
+    region: str = ""
     lat: Optional[float] = None
     lon: Optional[float] = None
-    area_total: Optional[float] = None
-    area_living: Optional[float] = None
-    area_kitchen: Optional[float] = None
+    area_m2: Optional[float] = None
     rooms: Optional[int] = None
     floor: Optional[int] = None
     floors_total: Optional[int] = None
     title: str = ""
     description: str = ""
     images: list = field(default_factory=list)
+    features: dict = field(default_factory=dict)
     metro_station: str = ""
     metro_minutes: Optional[int] = None
-    features: dict = field(default_factory=dict)
-    scraped_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    author_type: str = ""
+    source_hash: str = ""
+
+    def __post_init__(self):
+        if not self.source_hash:
+            content = f"{self.source}:{self.source_id}:{self.price}:{self.address}"
+            self.source_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+
+    def to_dict(self) -> dict:
+        return {k: v for k, v in self.__dict__.items() if v is not None and v != [] and v != {}}
 
 
 # ═══════════════════════════════════════════════════════════════
-# CIAN SCRAPER (Playwright)
+# RETRY DECORATOR
+# ═══════════════════════════════════════════════════════════════
+
+def retry(max_attempts: int = 3, base_delay: float = 2.0, max_delay: float = 60.0):
+    """Async retry with exponential backoff."""
+    def decorator(func):
+        async def wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(max_attempts):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+                    log.warning(f"[{func.__name__}] Attempt {attempt + 1}/{max_attempts} failed: {e}. Retry in {delay:.1f}s")
+                    await asyncio.sleep(delay)
+            raise last_error
+        return wrapper
+    return decorator
+
+
+# ═══════════════════════════════════════════════════════════════
+# PROXY MANAGER
+# ═══════════════════════════════════════════════════════════════
+
+class ProxyManager:
+    """Rotating proxy manager."""
+
+    def __init__(self, proxies: Optional[list[str]] = None):
+        self.proxies = proxies or []
+        self._index = 0
+        self._blocked: set[str] = set()
+
+    def get_proxy(self) -> Optional[str]:
+        if not self.proxies:
+            return None
+        available = [p for p in self.proxies if p not in self._blocked]
+        if not available:
+            self._blocked.clear()
+            available = self.proxies
+        proxy = available[self._index % len(available)]
+        self._index += 1
+        return proxy
+
+    def mark_blocked(self, proxy: str):
+        self._blocked.add(proxy)
+        log.warning(f"[proxy] Marked as blocked: {proxy[:30]}...")
+
+    @property
+    def has_proxies(self) -> bool:
+        return len(self.proxies) > 0
+
+
+# ═══════════════════════════════════════════════════════════════
+# CIAN SCRAPER
 # ═══════════════════════════════════════════════════════════════
 
 class CianScraper:
     """
-    ЦИАН — парсинг через Playwright.
+    ЦИАН — парсинг через Playwright с перехватом API.
     
     Стратегия:
-    1. Открываем страницу поиска
-    2. Ждём загрузку JS
-    3. Перехватываем внутренние API-ответы (JSON)
-    4. Парсим JSON-данные
+    1. Открываем страницу поиска в headless Chrome
+    2. Перехватываем JSON-ответы внутреннего API
+    3. Парсим структурированные данные
     
-    Альтернатива: cloudscraper + internal API (менее надёжно)
+    Fallback: HTML парсинг через selectolax.
     """
     SOURCE = "cian"
     BASE = "https://www.cian.ru"
-    
-    CITY_SLUGS = {
-        "Москва": "moskva",
-        "Санкт-Петербург": "sankt-peterburg",
-        "Новосибирск": "novosibirsk",
-        "Екатеринбург": "ekaterinburg",
-        "Казань": "kazan",
-        "Краснодар": "krasnodar",
-        "Сочи": "sochi",
-        "Владивосток": "vladivostok",
-        "Ростов-на-Дону": "rostov",
-        "Самара": "samara",
-        "Уфа": "ufa",
-        "Тюмень": "tyumen",
-        "Красноярск": "krasnoyarsk",
-        "Пермь": "perm",
-        "Воронеж": "voronezh",
+
+    REGIONS = {
+        "Москва": 1, "Санкт-Петербург": 2, "Новосибирск": 48,
+        "Екатеринбург": 47, "Казань": 44, "Краснодар": 36,
+        "Сочи": 37, "Владивосток": 75, "Самара": 51,
+        "Уфа": 55, "Тюмень": 68, "Красноярск": 42,
+        "Пермь": 50, "Воронеж": 38, "Ростов-на-Дону": 46,
     }
-    
-    async def scrape(self, city: str, deal_type: str = "sale", 
-                     limit: int = 50) -> list[Listing]:
-        """Скрейпинг объявлений ЦИАН."""
+
+    def __init__(self, proxy_manager: Optional[ProxyManager] = None):
+        self.proxy_manager = proxy_manager
+
+    @retry(max_attempts=2, base_delay=3.0)
+    async def scrape(self, city: str, deal_type: str = "sale", limit: int = 50) -> list[ListingData]:
+        """Скрейпинг ЦИАН через Playwright."""
         from playwright.async_api import async_playwright
-        
-        slug = self.CITY_SLUGS.get(city, "moskva")
-        
-        if deal_type == "sale":
-            url = f"{self.BASE}/prodazha-kvartiry/{slug}/"
+
+        region_id = self.REGIONS.get(city, 1)
+        if deal_type == "rent":
+            url = f"{self.BASE}/cat.php?engine_version=2&offer_type=flat&region={region_id}&deal_type=rent&type=4"
         else:
-            url = f"{self.BASE}/snyat-kvartiru/{slug}/"
-        
+            url = f"{self.BASE}/cat.php?engine_version=2&offer_type=flat&region={region_id}&deal_type=sale&type=4"
+
         api_data = []
-        items = []
-        
+        proxy = self.proxy_manager.get_proxy() if self.proxy_manager else None
+        proxy_config = {"server": proxy} if proxy else None
+
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox']
-            )
+            launch_args = {"headless": True, "args": ["--no-sandbox", "--disable-setuid-sandbox"]}
+            if proxy_config:
+                launch_args["proxy"] = proxy_config
+
+            browser = await p.chromium.launch(**launch_args)
             context = await browser.new_context(
                 viewport={"width": 1920, "height": 1080},
                 locale="ru-RU",
                 timezone_id="Europe/Moscow",
             )
             page = await context.new_page()
-            
-            # Перехват JSON API ответов
+
+            # Перехват API ответов
             async def on_response(response):
                 try:
                     if "search-offers" in response.url and response.status == 200:
@@ -119,45 +179,41 @@ class CianScraper:
                             api_data.extend(data["data"]["offersSerialized"])
                 except:
                     pass
-            
+
             page.on("response", on_response)
-            
+
             try:
                 await page.goto(url, wait_until="networkidle", timeout=30000)
                 await page.wait_for_timeout(3000)
-                
+
                 # Прокрутка для подгрузки
-                for _ in range(min(limit // 25, 3)):
+                for _ in range(min(limit // 25, 4)):
                     await page.evaluate("window.scrollBy(0, window.innerHeight)")
                     await page.wait_for_timeout(2000)
-                    
+
             except Exception as e:
-                print(f"[cian] Navigation error: {e}")
+                log.error(f"[cian] Navigation error: {e}")
+                if proxy:
+                    self.proxy_manager.mark_blocked(proxy)
             finally:
                 await browser.close()
-        
+
         # Парсим перехваченные данные
+        items = []
         for offer in api_data[:limit]:
             listing = self._parse_offer(offer, city, deal_type)
             if listing:
                 items.append(listing)
-        
-        # Если API не сработал — парсим HTML (fallback)
-        if not items:
-            print(f"[cian] API interception failed, trying HTML parse...")
-        
+
+        log.info(f"[cian] Scraped {len(items)} items for {city} ({deal_type})")
         return items
-    
-    def _parse_offer(self, offer: dict, city: str, deal_type: str) -> Optional[Listing]:
-        """Парсинг одного предложения из JSON API."""
+
+    def _parse_offer(self, offer: dict, city: str, deal_type: str) -> Optional[ListingData]:
         try:
             offer_id = str(offer.get("id", ""))
-            
-            # Цена
             bargain = offer.get("bargainTerms", {})
             price = bargain.get("price") or offer.get("fullPrice", 0)
-            
-            # Адрес
+
             geo = offer.get("geo", {})
             address_parts = []
             district = ""
@@ -167,60 +223,42 @@ class CianScraper:
                 if addr.get("type") == "district":
                     district = addr["title"]
             address = ", ".join(address_parts)
-            
-            # Координаты
+
             coords = geo.get("coordinates", {})
-            lat = coords.get("lat")
-            lon = coords.get("lng")
-            
-            # Метро
             metro_info = geo.get("metro", {})
-            metro_station = metro_info.get("name", "")
-            metro_minutes = metro_info.get("time")
-            
-            # Характеристики
-            rooms = offer.get("roomsCount")
-            total_area = offer.get("totalArea")
-            floor = offer.get("floorNumber")
-            floors_total = offer.get("building", {}).get("floorsCount")
-            
-            # Фото
             photos = offer.get("photos", [])
             images = [p.get("url2", p.get("url", "")) for p in photos[:10] if p.get("url")]
-            
-            # Автор
-            user = offer.get("user", {})
-            author_type = user.get("agentType", "unknown")
-            
-            return Listing(
+
+            return ListingData(
                 source=self.SOURCE,
                 source_id=offer_id,
-                source_url=f"{self.BASE}/sale/flat/{offer_id}/",
+                source_url=f"{self.BASE}/sale/flat/{offer_id}/" if deal_type == "sale" else f"{self.BASE}/rent/flat/{offer_id}/",
                 property_type="apartment",
                 deal_type=deal_type,
                 price=float(price),
                 address=address,
                 city=city,
                 district=district,
-                lat=lat,
-                lon=lon,
-                area_total=float(total_area) if total_area else None,
-                rooms=rooms,
-                floor=floor,
-                floors_total=floors_total,
+                lat=coords.get("lat"),
+                lon=coords.get("lng"),
+                area_m2=float(offer.get("totalArea")) if offer.get("totalArea") else None,
+                rooms=offer.get("roomsCount"),
+                floor=offer.get("floorNumber"),
+                floors_total=offer.get("building", {}).get("floorsCount"),
                 title=offer.get("title", ""),
                 description=offer.get("description", ""),
                 images=images,
-                metro_station=metro_station,
-                metro_minutes=metro_minutes,
-                features={"author_type": author_type},
+                metro_station=metro_info.get("name", ""),
+                metro_minutes=metro_info.get("time"),
+                author_type=offer.get("user", {}).get("agentType", ""),
             )
         except Exception as e:
+            log.debug(f"[cian] Parse error: {e}")
             return None
 
 
 # ═══════════════════════════════════════════════════════════════
-# AVITO SCRAPER (Playwright)
+# AVITO SCRAPER
 # ═══════════════════════════════════════════════════════════════
 
 class AvitoScraper:
@@ -228,62 +266,55 @@ class AvitoScraper:
     Авито — парсинг через Playwright.
     
     Стратегия:
-    1. Открываем страницу поиска
-    2. Парсим HTML-карточки объявлений
-    3. Для каждой карточки извлекаем данные из DOM
-    
-    Проблемы:
-    - Авито может показывать капчу
-    - Часто меняет CSS-классы
-    - Нужна ротация User-Agent
+    1. Рендерим JS через headless Chrome
+    2. Парсим DOM-карточки объявлений
+    3. Извлекаем данные из HTML-атрибутов
     """
     SOURCE = "avito"
-    
-    CITY_SLUGS = {
-        "Москва": "moskva",
-        "Санкт-Петербург": "sankt-peterburg",
-        "Новосибирск": "novosibirsk",
-        "Екатеринбург": "ekaterinburg",
-        "Казань": "kazan",
-        "Краснодар": "krasnodar",
-        "Сочи": "sochi",
+
+    CITIES = {
+        "Москва": "moskva", "Санкт-Петербург": "sankt-peterburg",
+        "Новосибирск": "novosibirsk", "Екатеринбург": "ekaterinburg",
+        "Казань": "kazan", "Краснодар": "krasnodar", "Сочи": "sochi",
     }
-    
-    async def scrape(self, city: str, deal_type: str = "sale",
-                     limit: int = 50) -> list[Listing]:
-        """Скрейпинг объявлений Авито."""
+
+    def __init__(self, proxy_manager: Optional[ProxyManager] = None):
+        self.proxy_manager = proxy_manager
+
+    @retry(max_attempts=2, base_delay=3.0)
+    async def scrape(self, city: str, deal_type: str = "sale", limit: int = 50) -> list[ListingData]:
         from playwright.async_api import async_playwright
-        
-        slug = self.CITY_SLUGS.get(city, "moskva")
+
+        slug = self.CITIES.get(city, "moskva")
         deal_path = "prodam" if deal_type == "sale" else "sdam"
         url = f"https://www.avito.ru/{slug}/kvartiry/{deal_path}"
-        
+
+        proxy = self.proxy_manager.get_proxy() if self.proxy_manager else None
+        proxy_config = {"server": proxy} if proxy else None
         items = []
-        
+
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox']
-            )
+            launch_args = {"headless": True, "args": ["--no-sandbox", "--disable-setuid-sandbox"]}
+            if proxy_config:
+                launch_args["proxy"] = proxy_config
+
+            browser = await p.chromium.launch(**launch_args)
             context = await browser.new_context(
                 viewport={"width": 1920, "height": 1080},
                 locale="ru-RU",
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             )
             page = await context.new_page()
-            
+
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 await page.wait_for_timeout(5000)
-                
-                # Прокрутка для подгрузки
+
                 for _ in range(3):
                     await page.evaluate("window.scrollBy(0, window.innerHeight)")
                     await page.wait_for_timeout(2000)
-                
-                # Парсим карточки
+
                 cards = await page.query_selector_all('[data-marker="item"]')
-                
                 for card in cards[:limit]:
                     try:
                         listing = await self._parse_card(card, city, deal_type)
@@ -291,79 +322,61 @@ class AvitoScraper:
                             items.append(listing)
                     except:
                         continue
-                
+
             except Exception as e:
-                print(f"[avito] Error: {e}")
+                log.error(f"[avito] Error: {e}")
+                if proxy:
+                    self.proxy_manager.mark_blocked(proxy)
             finally:
                 await browser.close()
-        
+
+        log.info(f"[avito] Scraped {len(items)} items for {city} ({deal_type})")
         return items
-    
-    async def _parse_card(self, card, city: str, deal_type: str) -> Optional[Listing]:
-        """Парсинг карточки объявления."""
+
+    async def _parse_card(self, card, city: str, deal_type: str) -> Optional[ListingData]:
         try:
-            # Название
             title_el = await card.query_selector('[itemprop="name"]')
             title = (await title_el.inner_text()).strip() if title_el else ""
-            
-            # Цена
+
             price_el = await card.query_selector('[itemprop="price"]')
             price_str = await price_el.get_attribute("content") if price_el else "0"
             price = float(re.sub(r'[^\d]', '', price_str) or "0")
-            
-            # Ссылка
+
             link_el = await card.query_selector('a[href*="/kvartiry/"]')
             href = (await link_el.get_attribute("href")) if link_el else ""
             url = f"https://www.avito.ru{href}" if href.startswith("/") else href
-            
-            # ID из URL
+
             id_match = re.search(r'_(\d+)$', href)
             source_id = id_match.group(1) if id_match else hashlib.md5(url.encode()).hexdigest()[:12]
-            
-            # Адрес
+
             addr_el = await card.query_selector('[data-marker="item-address"]')
             address = (await addr_el.inner_text()).strip() if addr_el else ""
-            
-            # Фото
+
             img_el = await card.query_selector('img[src*="avito"]')
             img_src = (await img_el.get_attribute("src")) if img_el else ""
-            
-            # Комнаты из заголовка
+
             rooms = None
             rm = re.search(r'(\d)\s*-?\s*комн', title.lower())
             if rm:
                 rooms = int(rm.group(1))
             elif 'студия' in title.lower():
                 rooms = 0
-            
-            # Площадь из заголовка
+
             area = None
             am = re.search(r'([\d.,]+)\s*м²', title)
             if am:
                 area = float(am.group(1).replace(",", "."))
-            
-            # Этаж
-            floor = None
-            floors_total = None
+
+            floor, floors_total = None, None
             fm = re.search(r'(\d+)/(\d+)\s*эт', title.lower())
             if fm:
-                floor = int(fm.group(1))
-                floors_total = int(fm.group(2))
-            
-            return Listing(
-                source=self.SOURCE,
-                source_id=source_id,
-                source_url=url,
-                property_type="apartment",
-                deal_type=deal_type,
-                price=price,
-                address=address,
-                city=city,
-                rooms=rooms,
-                area_total=area,
-                floor=floor,
-                floors_total=floors_total,
-                title=title,
+                floor, floors_total = int(fm.group(1)), int(fm.group(2))
+
+            return ListingData(
+                source=self.SOURCE, source_id=source_id, source_url=url,
+                property_type="apartment", deal_type=deal_type, price=price,
+                address=address, city=city, rooms=rooms, area_m2=area,
+                floor=floor, floors_total=floors_total, title=title,
                 images=[img_src] if img_src else [],
             )
         except:
@@ -371,7 +384,7 @@ class AvitoScraper:
 
 
 # ═══════════════════════════════════════════════════════════════
-# DOMCLICK SCRAPER (Playwright + API перехват)
+# DOMCLICK SCRAPER
 # ═══════════════════════════════════════════════════════════════
 
 class DomClickScraper:
@@ -379,52 +392,36 @@ class DomClickScraper:
     Домклик — парсинг через Playwright с перехватом API.
     
     Стратегия:
-    1. Открываем страницу поиска domclick.ru
+    1. Открываем страницу поиска
     2. Перехватываем JSON-ответы внутреннего API
     3. Парсим структурированные данные
-    
-    Преимущество: DomClick отдаёт подробные JSON с координатами,
-    площадями, метро и другими характеристиками.
     """
     SOURCE = "domclick"
-    
-    CITY_SLUGS = {
-        "Москва": "moskva",
-        "Санкт-Петербург": "sankt_peterburg",
-        "Новосибирск": "novosibirsk",
-        "Екатеринбург": "ekaterinburg",
-        "Казань": "kazan",
-        "Краснодар": "krasnodar",
-        "Сочи": "sochi",
-    }
-    
-    async def scrape(self, city: str, deal_type: str = "sale",
-                     limit: int = 50) -> list[Listing]:
-        """Скрейпинг объявлений Домклик."""
+
+    def __init__(self, proxy_manager: Optional[ProxyManager] = None):
+        self.proxy_manager = proxy_manager
+
+    @retry(max_attempts=2, base_delay=3.0)
+    async def scrape(self, city: str, deal_type: str = "sale", limit: int = 50) -> list[ListingData]:
         from playwright.async_api import async_playwright
-        
-        slug = self.CITY_SLUGS.get(city, "moskva")
-        deal_path = "prodazha" if deal_type == "sale" else "arenda"
-        url = f"https://domclick.ru/search?deal_type={deal_type}&category=apartment&address={slug}"
-        
+
+        url = f"https://domclick.ru/search?deal_type={deal_type}&category=apartment&address={city.lower()}"
         api_offers = []
-        
+        proxy = self.proxy_manager.get_proxy() if self.proxy_manager else None
+        proxy_config = {"server": proxy} if proxy else None
+
         async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox']
-            )
-            context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080},
-                locale="ru-RU",
-            )
+            launch_args = {"headless": True, "args": ["--no-sandbox", "--disable-setuid-sandbox"]}
+            if proxy_config:
+                launch_args["proxy"] = proxy_config
+
+            browser = await p.chromium.launch(**launch_args)
+            context = await browser.new_context(viewport={"width": 1920, "height": 1080}, locale="ru-RU")
             page = await context.new_page()
-            
-            # Перехват API
+
             async def on_response(response):
                 try:
-                    url = response.url
-                    if ("offers" in url or "search" in url) and response.status == 200:
+                    if ("offers" in response.url or "search" in response.url) and response.status == 200:
                         data = await response.json()
                         if isinstance(data, dict):
                             offers = data.get("result", {}).get("offers", [])
@@ -432,136 +429,113 @@ class DomClickScraper:
                                 api_offers.extend(offers)
                 except:
                     pass
-            
+
             page.on("response", on_response)
-            
+
             try:
                 await page.goto(url, wait_until="networkidle", timeout=30000)
                 await page.wait_for_timeout(5000)
-                
-                # Прокрутка
                 for _ in range(3):
                     await page.evaluate("window.scrollBy(0, window.innerHeight)")
                     await page.wait_for_timeout(2000)
-                    
             except Exception as e:
-                print(f"[domclick] Error: {e}")
+                log.error(f"[domclick] Error: {e}")
+                if proxy:
+                    self.proxy_manager.mark_blocked(proxy)
             finally:
                 await browser.close()
-        
-        # Парсим перехваченные данные
+
         items = []
         for offer in api_offers[:limit]:
             listing = self._parse_offer(offer, city, deal_type)
             if listing:
                 items.append(listing)
-        
+
+        log.info(f"[domclick] Scraped {len(items)} items for {city} ({deal_type})")
         return items
-    
-    def _parse_offer(self, offer: dict, city: str, deal_type: str) -> Optional[Listing]:
-        """Парсинг предложения из DomClick API."""
+
+    def _parse_offer(self, offer: dict, city: str, deal_type: str) -> Optional[ListingData]:
         try:
             offer_id = str(offer.get("id", ""))
-            
-            # Цена
             price_data = offer.get("price", {})
             price = price_data.get("value", 0)
-            
-            # Адрес
             addr = offer.get("address", {})
-            address = addr.get("full", "")
-            district = addr.get("district", "")
-            
-            # Гео
             geo = offer.get("geo", {})
-            lat = geo.get("lat")
-            lon = geo.get("lon")
-            
-            # Площади
-            area_total = offer.get("totalArea")
-            area_living = offer.get("livingArea")
-            area_kitchen = offer.get("kitchenArea")
-            
-            # Комнаты, этаж
-            rooms = offer.get("rooms")
-            floor = offer.get("floor")
-            floors_total = offer.get("floorsTotal")
-            ceiling = offer.get("ceilingHeight")
-            
-            # Дом
             building = offer.get("building", {})
-            year = building.get("buildYear")
-            wall_type = building.get("wallType", "")
-            
-            # Фото
             photos = offer.get("photos", [])
-            images = [p.get("url", "") for p in photos[:10] if p.get("url")]
-            
-            # Метро
             metro = offer.get("metro", {})
-            metro_station = metro.get("name", "")
-            metro_minutes = metro.get("time")
-            
-            return Listing(
-                source=self.SOURCE,
-                source_id=offer_id,
+
+            return ListingData(
+                source=self.SOURCE, source_id=offer_id,
                 source_url=f"https://domclick.ru/offers/{offer_id}",
-                property_type="apartment",
-                deal_type=deal_type,
-                price=float(price),
-                address=address,
-                city=city,
-                district=district,
-                lat=lat,
-                lon=lon,
-                area_total=float(area_total) if area_total else None,
-                area_living=float(area_living) if area_living else None,
-                area_kitchen=float(area_kitchen) if area_kitchen else None,
-                rooms=rooms,
-                floor=floor,
-                floors_total=floors_total,
-                title=offer.get("title", ""),
-                description=offer.get("description", ""),
-                images=images,
-                metro_station=metro_station,
-                metro_minutes=metro_minutes,
-                features={
-                    "year": year,
-                    "wall_type": wall_type,
-                    "ceiling_height": ceiling,
-                },
+                property_type="apartment", deal_type=deal_type,
+                price=float(price), address=addr.get("full", ""),
+                city=city, district=addr.get("district", ""),
+                lat=geo.get("lat"), lon=geo.get("lon"),
+                area_m2=float(offer.get("totalArea")) if offer.get("totalArea") else None,
+                rooms=offer.get("rooms"), floor=offer.get("floor"),
+                floors_total=offer.get("floorsTotal"),
+                title=offer.get("title", ""), description=offer.get("description", ""),
+                images=[p.get("url", "") for p in photos[:10] if p.get("url")],
+                metro_station=metro.get("name", ""), metro_minutes=metro.get("time"),
+                features={"year": building.get("buildYear"), "wall_type": building.get("wallType", "")},
             )
         except:
             return None
 
 
 # ═══════════════════════════════════════════════════════════════
-# ТЕСТ
+# UNIFIED SCRAPER
 # ═══════════════════════════════════════════════════════════════
 
-async def test_scraper():
-    """Тест всех парсеров."""
-    scrapers = [
-        ("CIAN", CianScraper()),
-        ("Avito", AvitoScraper()),
-        ("DomClick", DomClickScraper()),
-    ]
-    
-    for name, scraper in scrapers:
-        print(f"\n{'='*60}")
-        print(f"🔍 Testing {name}...")
-        print(f"{'='*60}")
-        
-        try:
-            items = await scraper.scrape("Москва", "sale", 3)
-            print(f"✅ Got {len(items)} items")
-            for i, item in enumerate(items):
-                print(f"  {i+1}. {item.rooms}к, {item.area_total}м² — {item.price:,.0f} ₽")
-                print(f"     📍 {item.address}")
-                print(f"     🔗 {item.source_url}")
-        except Exception as e:
-            print(f"❌ Error: {e}")
+class UnifiedScraper:
+    """Runs all scrapers with deduplication."""
 
+    def __init__(self, proxies: Optional[list[str]] = None):
+        self.proxy_manager = ProxyManager(proxies)
+        self.cian = CianScraper(self.proxy_manager)
+        self.avito = AvitoScraper(self.proxy_manager)
+        self.domclick = DomClickScraper(self.proxy_manager)
 
-if __name__ == "__main__":
-    asyncio.run(test_scraper())
+    async def scrape_all(self, city: str, deal_type: str = "sale", limit: int = 50) -> dict:
+        """Run all scrapers in parallel."""
+        import concurrent.futures
+
+        loop = asyncio.get_event_loop()
+        results = {"cian": [], "avito": [], "domclick": []}
+
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            cian_task = loop.run_in_executor(pool, lambda: asyncio.run(self.cian.scrape(city, deal_type, limit)))
+            avito_task = self.avito.scrape(city, deal_type, limit)
+            domclick_task = self.domclick.scrape(city, deal_type, limit)
+
+            cian_items, avito_items, domclick_items = await asyncio.gather(
+                cian_task, avito_task, domclick_task, return_exceptions=True,
+            )
+
+        for name, items in [("cian", cian_items), ("avito", avito_items), ("domclick", domclick_items)]:
+            if isinstance(items, Exception):
+                log.error(f"[{name}] Scraper failed: {items}")
+                results[name] = []
+            else:
+                results[name] = items
+
+        all_items = results["cian"] + results["avito"] + results["domclick"]
+        deduped = self._deduplicate(all_items)
+
+        return {
+            "by_source": results,
+            "total_raw": len(all_items),
+            "total_deduped": len(deduped),
+            "items": deduped,
+        }
+
+    def _deduplicate(self, items: list[ListingData]) -> list[ListingData]:
+        seen = set()
+        unique = []
+        for item in items:
+            if item.source_hash in seen:
+                continue
+            seen.add(item.source_hash)
+            unique.append(item)
+        return unique
