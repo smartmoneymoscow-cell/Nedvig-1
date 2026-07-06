@@ -7,8 +7,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "Realty Platform"
     DEBUG: bool = False
 
-    # Database
-    DATABASE_URL: str = "postgresql+asyncpg://realty:realty@localhost:5432/realty_db"
+    # Database — defaults to SQLite for local dev, override with .env for PostgreSQL
+    DATABASE_URL: str = "sqlite+aiosqlite:///./realty.db"
 
     # Elasticsearch
     ES_URL: str = "http://localhost:9200"

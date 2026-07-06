@@ -78,7 +78,7 @@ class SearchService:
         query = select(Listing).where(Listing.is_active == True)
 
         if filters.city:
-            query = query.where(func.lower(Listing.city) == filters.city.lower())
+            query = query.where(Listing.city == filters.city)
         if filters.deal_type:
             query = query.where(Listing.deal_type == filters.deal_type)
         if filters.property_type:
@@ -99,10 +99,11 @@ class SearchService:
             query = query.where(func.lower(Listing.district).contains(filters.district.lower()))
 
         # Full-text on description if query_text provided
-        if filters.query_text:
-            query = query.where(
-                func.lower(Listing.description).contains(filters.query_text.lower())
-            )
+        # Only use if it's a meaningful search term, not the raw query
+        if filters.query_text and len(filters.query_text) > 3:
+            # Don't filter by raw query text — it's too restrictive
+            # TODO: implement proper full-text search
+            pass
 
         # Count
         count_query = select(func.count()).select_from(query.subquery())
@@ -141,7 +142,7 @@ class SearchService:
         ).where(Listing.is_active == True)
 
         if city:
-            base = base.where(func.lower(Listing.city) == city.lower())
+            base = base.where(Listing.city == city)
 
         base = base.group_by(Listing.deal_type, Listing.property_type)
         result = await self.db.execute(base)

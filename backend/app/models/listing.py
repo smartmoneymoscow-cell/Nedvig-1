@@ -31,8 +31,14 @@ class Listing(Base):
     source_url: Mapped[str] = mapped_column(String(500), nullable=False)
 
     # Type
-    property_type: Mapped[PropertyType] = mapped_column(Enum(PropertyType), nullable=False, index=True)
-    deal_type: Mapped[DealType] = mapped_column(Enum(DealType), nullable=False, index=True)
+    property_type: Mapped[PropertyType] = mapped_column(
+        Enum(PropertyType, values_callable=lambda x: [e.value for e in x]),
+        nullable=False, index=True
+    )
+    deal_type: Mapped[DealType] = mapped_column(
+        Enum(DealType, values_callable=lambda x: [e.value for e in x]),
+        nullable=False, index=True
+    )
 
     # Price
     price: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False, index=True)

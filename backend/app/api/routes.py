@@ -164,6 +164,39 @@ async def compare_cities(
         await search.close()
 
 
+# ─── Scraping (admin) ─────────────────────────────────────
+
+@router.post("/api/admin/scrape")
+async def trigger_scrape(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger scraping for a city."""
+    from app.scrapers.runner import ScraperRunner
+    from app.services.ingestion import IngestionPipeline
+
+    city = body.get("city", "Москва")
+    sources = body.get("sources")  # None = all
+    deal_type = body.get("deal_type", "sale")
+    max_pages = body.get("max_pages", 2)
+
+    runner = ScraperRunner()
+    result = await runner.scrape_city(city, deal_type, sources, max_pages)
+
+    # Ingest into database
+    pipeline = IngestionPipeline(db)
+    stats = await pipeline.ingest_from_scraper_result(result)
+
+    return {
+        "city": city,
+        "deal_type": deal_type,
+        "sources": result["by_source"],
+        "scraped": result["total_raw"],
+        "deduped": result["total_deduped"],
+        "ingestion": stats,
+    }
+
+
 # ─── Stats ───────────────────────────────────────────────────────
 
 @router.get("/api/stats")
