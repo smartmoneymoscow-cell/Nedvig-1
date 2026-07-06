@@ -15,6 +15,9 @@ agent = AIAgent()
 
 # ─── AI Agent Chat ───────────────────────────────────────────────
 
+from app.ai.agent import CITY_ALIASES
+
+
 @router.post("/api/agent/chat")
 async def agent_chat(
     body: dict,
@@ -32,20 +35,36 @@ async def agent_chat(
         if action == "analytics":
             data = await search.get_analytics(city=filters.city)
         elif action == "compare":
-            # For compare, need two cities — extract from query
+            # Extract cities using full alias map
             cities = []
-            for alias, name in [
-                ("москва", "Москва"), ("мск", "Москва"),
-                ("питер", "Санкт-Петербург"), ("спб", "Санкт-Петербург"),
-                ("новосибирск", "Новосибирск"), ("екатеринбург", "Екатеринбург"),
-            ]:
-                if alias in query.lower():
+            ql = query.lower()
+            for alias, name in sorted(CITY_ALIASES.items(), key=lambda x: -len(x[0])):
+                if alias in ql and name not in cities:
                     cities.append(name)
             if len(cities) >= 2:
                 data = await search.compare_cities(cities[0], cities[1], filters.property_type)
             else:
-                data = await search.search(filters)
-                action = "search"
+                return {
+                    "response": "📊 Укажите два города для сравнения. Например: 'сравни цены в Москве и Питере'",
+                    "action": "compare",
+                    "filters": {},
+                    "total": 0,
+                }
+        elif action == "stats":
+            total = (await db.execute(
+                select(func.count(Listing.id)).where(Listing.is_active == True)
+            )).scalar()
+            by_city = dict((await db.execute(
+                select(Listing.city, func.count(Listing.id))
+                .where(Listing.is_active == True)
+                .group_by(Listing.city)
+            )).all())
+            by_source = dict((await db.execute(
+                select(Listing.source, func.count(Listing.id))
+                .where(Listing.is_active == True)
+                .group_by(Listing.source)
+            )).all())
+            data = {"total": total, "by_city": by_city, "by_source": by_source}
         else:
             data = await search.search(filters)
 
@@ -79,8 +98,8 @@ async def get_listings(
     price_min: Optional[float] = None,
     price_max: Optional[float] = None,
     rooms: Optional[int] = None,
-    sort_by: str = Query("created_at", regex="^(created_at|price|area_m2)$"),
-    sort_order: str = Query("desc", regex="^(asc|desc)$"),
+    sort_by: str = Query("created_at", pattern="^(created_at|price|area_m2)$"),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),

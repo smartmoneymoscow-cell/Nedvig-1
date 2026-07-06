@@ -1,14 +1,26 @@
 """Search service — combines PostgreSQL filters + Elasticsearch full-text + semantic search."""
 
+import logging
 from typing import Optional
-from decimal import Decimal
-from sqlalchemy import select, func, and_, desc
+from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from elasticsearch import AsyncElasticsearch
 from app.models.listing import Listing, PropertyType, DealType
 from app.config import get_settings
 
 settings = get_settings()
+log = logging.getLogger("realty")
+
+# Singleton ES client — shared across all SearchService instances
+_es_client: AsyncElasticsearch | None = None
+
+
+def get_es_client() -> AsyncElasticsearch:
+    """Get or create singleton Elasticsearch client."""
+    global _es_client
+    if _es_client is None:
+        _es_client = AsyncElasticsearch(settings.ES_URL)
+    return _es_client
 
 
 class SearchFilters:
@@ -47,7 +59,7 @@ class SearchFilters:
 class SearchService:
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.es = AsyncElasticsearch(settings.ES_URL)
+        self.es = get_es_client()
 
     async def search(
         self,
@@ -146,7 +158,7 @@ class SearchService:
 
         return {"city": city, "analytics": analytics}
 
-    async def compare_cities(self, city1: str, city2: str, property_type: Optional[str] = None) -> dict:
+    async def compare_cities(self, city1: str, city2: str, property_type=None) -> dict:
         """Compare prices between two cities."""
         results = {}
         for city in [city1, city2]:
@@ -157,4 +169,5 @@ class SearchService:
         return {"comparison": results}
 
     async def close(self):
-        await self.es.close()
+        """No-op — singleton ES client stays open."""
+        pass

@@ -1,8 +1,7 @@
 import uuid
 import enum
 from datetime import datetime
-from decimal import Decimal
-from sqlalchemy import String, Text, Integer, Float, Boolean, DateTime, Enum, Index
+from sqlalchemy import String, Text, Integer, Float, Numeric, Boolean, DateTime, Enum, Index, func
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.database import Base
@@ -37,7 +36,7 @@ class Listing(Base):
     deal_type: Mapped[DealType] = mapped_column(Enum(DealType), nullable=False, index=True)
 
     # Price
-    price: Mapped[Decimal] = mapped_column(Float, nullable=False, index=True)
+    price: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False, index=True)
     currency: Mapped[str] = mapped_column(String(3), default="RUB")
 
     # Specs
@@ -63,9 +62,9 @@ class Listing(Base):
     embedding: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     # Meta
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    scraped_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
     # Composite indexes for common queries

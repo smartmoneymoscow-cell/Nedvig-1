@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: realty_db
       POSTGRES_USER: realty
-      POSTGRES_PASSWORD: realty
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
@@ -41,8 +41,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://realty:realty@postgres:5432/realty_db
+      DATABASE_URL: postgresql+asyncpg://realty:${POSTGRES_PASSWORD}@postgres:5432/realty_db
       ES_URL: http://elasticsearch:9200
+      SECRET_KEY: ${SECRET_KEY}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://nedvig.ru,http://localhost:3000}
     depends_on:
       postgres:
         condition: service_healthy
