@@ -2,8 +2,6 @@ services:
   - type: web
     name: nedvig-backend
     runtime: docker
-    dockerfilePath: ./backend/Dockerfile
-    dockerContext: ./backend
     region: oregon
     plan: free
     envVars:
