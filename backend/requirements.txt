@@ -32,6 +32,9 @@ bcrypt==4.2.0
 # Cache
 redis==5.1.0
 
+# Email validation
+email-validator==2.2.0
+
 # Utils
 python-dotenv==1.0.1
 python-multipart==0.0.12

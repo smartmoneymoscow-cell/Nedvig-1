@@ -61,12 +61,42 @@ app.include_router(auth_router)
 async def root():
     return {
         "name": settings.APP_NAME,
-        "version": "0.2.0",
+        "version": "0.3.0",
         "docs": "/docs",
         "endpoints": {
             "agent": "POST /api/agent/chat",
             "listings": "GET /api/listings",
             "analytics": "GET /api/analytics",
             "stats": "GET /api/stats",
+            "auth": "POST /api/auth/register",
+            "health": "GET /api/health",
         },
     }
+
+
+@app.get("/api/health")
+async def health():
+    """Health check — verifies DB and Redis connectivity."""
+    from app.services.cache import CacheService
+    from sqlalchemy import text
+
+    checks = {"status": "ok", "version": "0.3.0"}
+
+    # DB check
+    try:
+        from app.models.database import async_session
+        async with async_session() as session:
+            await session.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error: {e}"
+        checks["status"] = "degraded"
+
+    # Redis check
+    cache = CacheService()
+    if await cache.ping():
+        checks["redis"] = "ok"
+    else:
+        checks["redis"] = "unavailable"
+
+    return checks
