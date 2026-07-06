@@ -32,6 +32,7 @@ PROPERTY_KEYWORDS = {
 
 DEAL_KEYWORDS = {
     "аренда": DealType.RENT,
+    "аренду": DealType.RENT,
     "снять": DealType.RENT,
     "сниму": DealType.RENT,
     "арендовать": DealType.RENT,
@@ -170,12 +171,18 @@ class AIAgent:
                             filters.price_min = parse_price_value(m.group(1), m.group(2))
 
         # ── Parse area ───────────────────────────────────────
-        m = re.search(r"от\s+(\d+)\s*м[²2]", text_lower)
+        # "от 50 до 100 м²"
+        m = re.search(r"от\s+(\d+)\s*до\s+(\d+)\s*м[²2]", text_lower)
         if m:
             filters.area_min = float(m.group(1))
-        m = re.search(r"до\s+(\d+)\s*м[²2]", text_lower)
-        if m:
-            filters.area_max = float(m.group(1))
+            filters.area_max = float(m.group(2))
+        else:
+            m = re.search(r"от\s+(\d+)\s*м[²2]", text_lower)
+            if m:
+                filters.area_min = float(m.group(1))
+            m = re.search(r"до\s+(\d+)\s*м[²2]", text_lower)
+            if m:
+                filters.area_max = float(m.group(1))
 
         # ── Parse floor ──────────────────────────────────────
         m = re.search(r"на\s+(\d+)\s*этаж", text_lower)

@@ -15,11 +15,15 @@ log = logging.getLogger("realty")
 _es_client: AsyncElasticsearch | None = None
 
 
-def get_es_client() -> AsyncElasticsearch:
-    """Get or create singleton Elasticsearch client."""
+def get_es_client() -> AsyncElasticsearch | None:
+    """Get or create singleton Elasticsearch client. Returns None if ES unavailable."""
     global _es_client
     if _es_client is None:
-        _es_client = AsyncElasticsearch(settings.ES_URL)
+        try:
+            _es_client = AsyncElasticsearch(settings.ES_URL)
+        except Exception as e:
+            log.warning(f"Elasticsearch unavailable: {e}")
+            return None
     return _es_client
 
 

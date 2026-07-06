@@ -1,8 +1,7 @@
 import uuid
 import enum
 from datetime import datetime
-from sqlalchemy import String, Text, Integer, Float, Numeric, Boolean, DateTime, Enum, Index, func
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import String, Text, Integer, Float, Numeric, Boolean, DateTime, Enum, Index, func, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 from app.models.database import Base
 
@@ -24,7 +23,7 @@ class DealType(str, enum.Enum):
 class Listing(Base):
     __tablename__ = "listings"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
 
     # Source
     source: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
@@ -55,11 +54,11 @@ class Listing(Base):
 
     # Content
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    images: Mapped[list | None] = mapped_column(JSONB, nullable=True, default=list)
-    features: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=dict)
+    images: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
+    features: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
 
     # Embedding for semantic search (stored as JSON array in MVP, migrate to pgvector later)
-    embedding: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    embedding: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     # Meta
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
