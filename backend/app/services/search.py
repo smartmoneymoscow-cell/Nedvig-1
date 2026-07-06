@@ -19,6 +19,8 @@ def get_es_client() -> AsyncElasticsearch | None:
     """Get or create singleton Elasticsearch client. Returns None if ES unavailable."""
     global _es_client
     if _es_client is None:
+        if not settings.ES_URL:
+            return None
         try:
             _es_client = AsyncElasticsearch(settings.ES_URL)
         except Exception as e:

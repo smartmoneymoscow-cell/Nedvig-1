@@ -17,6 +17,9 @@ def get_redis():
     if _redis_client is not None:
         return _redis_client
 
+    if not getattr(settings, 'REDIS_URL', ''):
+        return None
+
     try:
         import redis.asyncio as aioredis
         _redis_client = aioredis.from_url(

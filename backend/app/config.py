@@ -10,12 +10,12 @@ class Settings(BaseSettings):
     # Database — defaults to SQLite for local dev, override with .env for PostgreSQL
     DATABASE_URL: str = "sqlite+aiosqlite:///./realty.db"
 
-    # Elasticsearch
-    ES_URL: str = "http://localhost:9200"
+    # Elasticsearch (optional — empty string disables)
+    ES_URL: str = ""
     ES_INDEX: str = "listings"
 
     # CORS
-    CORS_ORIGINS: list[str] = ["https://nedvig.ru", "http://localhost:3000"]
+    CORS_ORIGINS: list[str] = ["*"]
 
     # Auth
     SECRET_KEY: str = "change-me-in-production"
@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     SCRAPE_CONCURRENT_REQUESTS: int = 8
     SCRAPE_DOWNLOAD_DELAY: float = 1.5
     SCRAPE_PROXY_LIST: list[str] = []
+
+    # Redis (optional — empty string disables)
+    REDIS_URL: str = ""
 
     class Config:
         env_file = ".env"

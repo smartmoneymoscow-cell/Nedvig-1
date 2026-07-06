@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: nedvig-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    region: oregon
+    plan: free
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nedvig-db
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "false"
+      - key: CORS_ORIGINS
+        value: "https://nedvig.ru"
+      - key: ES_URL
+        value: ""
+      - key: REDIS_URL
+        value: ""
+    healthCheckPath: /api/health
+
+databases:
+  - name: nedvig-db
+    plan: free
+    databaseName: realty_db
+    user: realty

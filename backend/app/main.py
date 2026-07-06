@@ -76,8 +76,7 @@ async def root():
 
 @app.get("/api/health")
 async def health():
-    """Health check — verifies DB and Redis connectivity."""
-    from app.services.cache import CacheService
+    """Health check — verifies DB connectivity. Redis/ES are optional."""
     from sqlalchemy import text
 
     checks = {"status": "ok", "version": "0.3.0"}
@@ -92,11 +91,15 @@ async def health():
         checks["database"] = f"error: {e}"
         checks["status"] = "degraded"
 
-    # Redis check
-    cache = CacheService()
-    if await cache.ping():
-        checks["redis"] = "ok"
-    else:
-        checks["redis"] = "unavailable"
+    # Redis check (optional)
+    try:
+        from app.services.cache import CacheService
+        cache = CacheService()
+        if await cache.ping():
+            checks["redis"] = "ok"
+        else:
+            checks["redis"] = "unavailable"
+    except Exception:
+        checks["redis"] = "disabled"
 
     return checks
