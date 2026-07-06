@@ -510,6 +510,10 @@ body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); color
 
 <script>
 // ═══ DATA ═══
+// Use local backend or demo data
+const API = 'http://localhost:8001';
+const USE_API = true; // set to false for offline demo
+
 const D=[
 {id:1,src:"cian",pt:"apartment",dt:"sale",pr:18500000,ar:65,rm:2,fl:5,ft:12,ad:"ул. Тверская, 15",dt2:"Центральный",ct:"Москва",ds:"Уютная 2-комнатная квартира в центре Москвы. Свежий ремонт, панорамные окна."},
 {id:2,src:"avito",pt:"apartment",dt:"sale",pr:35000000,ar:95,rm:3,fl:8,ft:15,ad:"ул. Арбат, 25",dt2:"Арбат",ct:"Москва",ds:"Просторная трёшка в историческом центре. Высокие потолки, паркет."},
@@ -623,15 +627,46 @@ function sendQuery() {
   addMsg('user', q);
   addTyping();
 
-  setTimeout(() => {
-    removeTyping();
-    const response = processQuery(q);
-    addMsg('agent', response.text);
-    if (response.listings) {
-      filtered = response.listings;
+  if (USE_API) {
+    fetch(`${API}/api/agent/chat`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: q})
+    })
+    .then(r => r.json())
+    .then(data => {
+      removeTyping();
+      addMsg('agent', data.response);
+      if (data.total > 0) fetchListings(data.filters);
+    })
+    .catch(() => { removeTyping(); addMsg('agent', '❌ Ошибка соединения с сервером'); });
+  } else {
+    setTimeout(() => {
+      removeTyping();
+      const response = processQuery(q);
+      addMsg('agent', response.text);
+      if (response.listings) {
+        filtered = response.listings;
+        document.getElementById('navCount').textContent = filtered.length;
+      }
+    }, 700);
+  }
+}
+
+function fetchListings(filters) {
+  const params = new URLSearchParams();
+  if (filters.city) params.set('city', filters.city);
+  if (filters.deal_type) params.set('deal_type', filters.deal_type);
+  if (filters.property_type) params.set('property_type', filters.property_type);
+  if (filters.price_max) params.set('price_max', String(filters.price_max));
+  if (filters.rooms) params.set('rooms', String(filters.rooms));
+  fetch(`${API}/api/listings?${params}`)
+    .then(r => r.json())
+    .then(data => {
+      filtered = data.items || [];
       document.getElementById('navCount').textContent = filtered.length;
-    }
-  }, 700);
+    })
+    .catch(() => {});
 }
 
 function processQuery(q) {
