@@ -233,7 +233,7 @@ async def seed_data(db: AsyncSession = Depends(get_db)):
     if count > 0:
         return {"message": f"Already seeded ({count} listings)", "seeded": False}
 
-    from scripts.seed_data import SAMPLE_LISTINGS
+    from app.data.seed import SAMPLE_LISTINGS
 
     import random
     for data in SAMPLE_LISTINGS:
