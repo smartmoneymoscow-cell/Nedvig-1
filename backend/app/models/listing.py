@@ -29,6 +29,7 @@ class Listing(Base):
     source: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     source_id: Mapped[str] = mapped_column(String(200), nullable=False)
     source_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     # Type
     property_type: Mapped[PropertyType] = mapped_column(
@@ -42,6 +43,7 @@ class Listing(Base):
 
     # Price
     price: Mapped[float] = mapped_column(Numeric(15, 2), nullable=False, index=True)
+    price_per_m2: Mapped[float | None] = mapped_column(Numeric(15, 2), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="RUB")
 
     # Specs
@@ -59,6 +61,7 @@ class Listing(Base):
     lon: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Content
+    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     images: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
     features: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=dict)
@@ -86,7 +89,8 @@ class Listing(Base):
             "source_url": self.source_url,
             "property_type": self.property_type.value if self.property_type else None,
             "deal_type": self.deal_type.value if self.deal_type else None,
-            "price": self.price,
+            "price": float(self.price),
+            "price_per_m2": float(self.price_per_m2) if self.price_per_m2 else None,
             "currency": self.currency,
             "area_m2": self.area_m2,
             "rooms": self.rooms,

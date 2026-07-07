@@ -146,7 +146,7 @@ class IngestionPipeline:
             # Update if price changed
             if abs(float(existing.price) - price) > 1000:
                 existing.price = price
-                existing.updated_at = datetime.now(timezone.utc).isoformat()
+                existing.updated_at = datetime.now(timezone.utc)
                 self.stats["updated"] += 1
             else:
                 self.stats["skipped"] += 1

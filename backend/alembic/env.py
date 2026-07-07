@@ -11,6 +11,7 @@ sys.path.insert(0, ".")
 # Import models so Alembic can detect them
 from app.models.database import Base
 from app.models.listing import Listing  # noqa: F401
+from app.models.user import User  # noqa: F401
 
 # Alembic Config object
 config = context.config

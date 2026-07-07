@@ -4,7 +4,12 @@ import logging
 from typing import Optional
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
-from elasticsearch import AsyncElasticsearch
+try:
+    from elasticsearch import AsyncElasticsearch
+    _HAS_ELASTICSEARCH = True
+except ImportError:
+    AsyncElasticsearch = None
+    _HAS_ELASTICSEARCH = False
 from app.models.listing import Listing, PropertyType, DealType
 from app.config import get_settings
 
@@ -12,14 +17,14 @@ settings = get_settings()
 log = logging.getLogger("realty")
 
 # Singleton ES client — shared across all SearchService instances
-_es_client: AsyncElasticsearch | None = None
+_es_client = None
 
 
-def get_es_client() -> AsyncElasticsearch | None:
+def get_es_client():
     """Get or create singleton Elasticsearch client. Returns None if ES unavailable."""
     global _es_client
     if _es_client is None:
-        if not settings.ES_URL:
+        if not settings.ES_URL or not _HAS_ELASTICSEARCH:
             return None
         try:
             _es_client = AsyncElasticsearch(settings.ES_URL)
