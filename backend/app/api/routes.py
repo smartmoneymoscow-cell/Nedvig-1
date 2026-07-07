@@ -221,3 +221,40 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
         "by_source": {row[0]: row[1] for row in by_source},
         "top_cities": {row[0]: row[1] for row in by_city},
     }
+
+
+# ─── Seed Data (one-time) ─────────────────────────────────────
+
+@router.post("/api/admin/seed")
+async def seed_data(db: AsyncSession = Depends(get_db)):
+    """Populate database with sample listings. Idempotent."""
+    # Check if already seeded
+    count = (await db.execute(select(func.count(Listing.id)))).scalar()
+    if count > 0:
+        return {"message": f"Already seeded ({count} listings)", "seeded": False}
+
+    from scripts.seed_data import SAMPLE_LISTINGS
+
+    import random
+    for data in SAMPLE_LISTINGS:
+        listing = Listing(
+            source=random.choice(["cian", "avito", "domclick"]),
+            source_id=f"seed_{hash(data['address'])}",
+            source_url=f"https://example.com/listing/{hash(data['address'])}",
+            property_type=PropertyType(data["property_type"]),
+            deal_type=DealType(data["deal_type"]),
+            price=data["price"],
+            currency="RUB",
+            area_m2=data.get("area_m2"),
+            rooms=data.get("rooms"),
+            floor=data.get("floor"),
+            floors_total=data.get("floors_total"),
+            address=data["address"],
+            district=data.get("district"),
+            city=data["city"],
+            description=data.get("description"),
+        )
+        db.add(listing)
+
+    await db.commit()
+    return {"message": f"Seeded {len(SAMPLE_LISTINGS)} listings", "seeded": True}
