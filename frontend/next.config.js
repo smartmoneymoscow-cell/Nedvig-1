@@ -1,13 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  async rewrites() {
-    return [
-      {
-        source: '/api/:path*',
-        destination: 'http://localhost:8000/api/:path*',
-      },
-    ];
-  },
+  output: 'export',
+  basePath: '/Nedvig-1',
+  images: { unoptimized: true },
+  trailingSlash: true,
 };
 
 module.exports = nextConfig;
