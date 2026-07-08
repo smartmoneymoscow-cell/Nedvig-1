@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -27,21 +27,35 @@ function formatPriceShort(price: number): string {
   return String(price);
 }
 
+function formatPrice(price: number, dealType?: string): string {
+  if (dealType === 'rent') {
+    return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(price) + ' ₽/мес';
+  }
+  if (price >= 1_000_000) {
+    const mln = price / 1_000_000;
+    return mln % 1 === 0 ? `${mln} млн ₽` : `${mln.toFixed(1)} млн ₽`;
+  }
+  return new Intl.NumberFormat('ru-RU').format(price) + ' ₽';
+}
+
 export default function MapView({ center, zoom, listings, hoveredId, onMarkerClick, sourceColors }: MapViewProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstance = useRef<L.Map | null>(null);
   const markersLayer = useRef<L.LayerGroup | null>(null);
   const clickRef = useRef(onMarkerClick);
-
   clickRef.current = onMarkerClick;
 
-  // Init map
+  // Init map — scrollZoom disabled by default
   useEffect(() => {
     if (!mapRef.current || mapInstance.current) return;
 
     const map = L.map(mapRef.current, {
       zoomControl: false,
       attributionControl: false,
+      scrollWheelZoom: false,   // ← FIX: no zoom on scroll
+      doubleClickZoom: true,
+      touchZoom: true,
+      dragging: true,
     }).setView(center, zoom);
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
@@ -55,10 +69,7 @@ export default function MapView({ center, zoom, listings, hoveredId, onMarkerCli
     markersLayer.current = L.layerGroup().addTo(map);
     mapInstance.current = map;
 
-    return () => {
-      map.remove();
-      mapInstance.current = null;
-    };
+    return () => { map.remove(); mapInstance.current = null; };
   }, []);
 
   // Update view
@@ -73,67 +84,47 @@ export default function MapView({ center, zoom, listings, hoveredId, onMarkerCli
     if (!markersLayer.current) return;
     markersLayer.current.clearLayers();
 
-    const validListings = listings.filter(l => l.lat && l.lon);
+    const valid = listings.filter(l => l.lat && l.lon);
 
-    validListings.forEach(listing => {
+    valid.forEach(listing => {
       const color = sourceColors[listing.source] || '#666';
       const priceLabel = formatPriceShort(listing.price);
       const isHovered = hoveredId === listing.id;
 
       const icon = L.divIcon({
         className: 'custom-marker',
-        html: `
-          <div style="
-            position: relative;
-            background: ${color};
-            color: white;
-            font-size: 11px;
-            font-weight: 700;
-            padding: 4px 8px;
-            border-radius: 8px;
-            white-space: nowrap;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-            transform: ${isHovered ? 'scale(1.2)' : 'scale(1)'};
-            transition: transform 0.15s;
-            cursor: pointer;
-            font-family: Inter, system-ui, sans-serif;
-          ">
-            ${priceLabel} ₽
-            <div style="
-              position: absolute;
-              bottom: -5px;
-              left: 50%;
-              transform: translateX(-50%);
-              width: 0; height: 0;
-              border-left: 5px solid transparent;
-              border-right: 5px solid transparent;
-              border-top: 5px solid ${color};
-            "></div>
-          </div>
-        `,
+        html: `<div style="
+          position:relative; background:${color}; color:white;
+          font-size:11px; font-weight:700; padding:4px 8px; border-radius:8px;
+          white-space:nowrap; box-shadow:0 2px 6px rgba(0,0,0,0.3);
+          transform:${isHovered ? 'scale(1.3)' : 'scale(1)'};
+          transition:transform 0.15s; cursor:pointer;
+          font-family:Inter,system-ui,sans-serif;
+        ">
+          ${priceLabel} ₽
+          <div style="position:absolute;bottom:-5px;left:50%;transform:translateX(-50%);
+            width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;
+            border-top:5px solid ${color};"></div>
+        </div>`,
         iconSize: [0, 0],
         iconAnchor: [30, 35],
       });
 
       const marker = L.marker([listing.lat!, listing.lon!], { icon });
-
       marker.on('click', () => clickRef.current(listing));
 
       marker.bindTooltip(
-        `<div style="font-family:Inter,system-ui,sans-serif;max-width:200px">
-          <div style="font-weight:700;color:#2563eb;margin-bottom:2px">${formatPrice(listing.price, listing.deal_type)}</div>
-          <div style="font-size:11px;color:#666">
+        `<div style="font-family:Inter,system-ui,sans-serif;max-width:220px">
+          <div style="font-weight:700;color:#2563eb;font-size:14px;margin-bottom:3px">${formatPrice(listing.price, listing.deal_type)}</div>
+          <div style="font-size:12px;color:#444">
             ${listing.rooms !== null ? (listing.rooms === 0 ? 'Студия' : listing.rooms + '-комн.') : ''}
-            ${listing.area_m2 ? ' • ' + listing.area_m2 + ' м²' : ''}
+            ${listing.area_m2 ? ' · ' + listing.area_m2 + ' м²' : ''}
+            ${listing.floor ? ' · ' + listing.floor + '/' + listing.floors_total + ' эт.' : ''}
           </div>
-          <div style="font-size:10px;color:#999;margin-top:2px">📍 ${listing.city}, ${listing.address}</div>
-          <div style="font-size:9px;color:${color};margin-top:2px;font-weight:600">${listing.source}</div>
+          <div style="font-size:11px;color:#888;margin-top:3px">📍 ${listing.city}, ${listing.address}</div>
+          <div style="font-size:10px;color:${color};margin-top:3px;font-weight:600;text-transform:uppercase">${listing.source}</div>
         </div>`,
-        {
-          direction: 'top',
-          offset: [0, -35],
-          className: 'custom-tooltip',
-        }
+        { direction: 'top', offset: [0, -38], className: 'custom-tooltip' }
       );
 
       markersLayer.current!.addLayer(marker);
@@ -141,15 +132,4 @@ export default function MapView({ center, zoom, listings, hoveredId, onMarkerCli
   }, [listings, hoveredId, sourceColors]);
 
   return <div ref={mapRef} className="w-full h-full" />;
-}
-
-function formatPrice(price: number, dealType?: string): string {
-  if (dealType === 'rent') {
-    return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(price) + ' ₽/мес';
-  }
-  if (price >= 1_000_000) {
-    const mln = price / 1_000_000;
-    return mln % 1 === 0 ? `${mln} млн ₽` : `${mln.toFixed(1)} млн ₽`;
-  }
-  return new Intl.NumberFormat('ru-RU').format(price) + ' ₽';
 }
