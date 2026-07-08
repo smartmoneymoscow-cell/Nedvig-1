@@ -290,11 +290,12 @@ async def seed_data(
     from app.data.seed import SAMPLE_LISTINGS
 
     import random
-    for data in SAMPLE_LISTINGS:
+    sources = ["cian", "avito", "domclick", "n1", "yandex", "irr", "bn"]
+    for i, data in enumerate(SAMPLE_LISTINGS):
         listing = Listing(
-            source=random.choice(["cian", "avito", "domclick"]),
-            source_id=f"seed_{hash(data['address'])}",
-            source_url=f"https://example.com/listing/{hash(data['address'])}",
+            source=sources[i % len(sources)],
+            source_id=f"seed_{i}",
+            source_url=f"https://example.com/listing/{i}",
             property_type=PropertyType(data["property_type"]),
             deal_type=DealType(data["deal_type"]),
             price=data["price"],
@@ -307,6 +308,8 @@ async def seed_data(
             district=data.get("district"),
             city=data["city"],
             description=data.get("description"),
+            lat=data.get("lat"),
+            lon=data.get("lon"),
         )
         db.add(listing)
 

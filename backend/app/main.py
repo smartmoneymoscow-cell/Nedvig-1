@@ -25,6 +25,43 @@ async def lifespan(app: FastAPI):
     """Startup & shutdown."""
     await init_db()
     log.info("✅ Database initialized")
+
+    # Auto-seed if database is empty
+    from sqlalchemy import select, func
+    from app.models.database import async_session
+    from app.models.listing import Listing
+
+    async with async_session() as session:
+        count = (await session.execute(select(func.count(Listing.id)))).scalar()
+        if count == 0:
+            log.info("📦 Database empty, seeding sample data...")
+            from app.data.seed import SAMPLE_LISTINGS
+            from app.models.listing import PropertyType, DealType
+            sources = ["cian", "avito", "domclick", "n1", "yandex", "irr", "bn"]
+            for i, data in enumerate(SAMPLE_LISTINGS):
+                listing = Listing(
+                    source=sources[i % len(sources)],
+                    source_id=f"seed_{i}",
+                    source_url=f"https://example.com/listing/{i}",
+                    property_type=PropertyType(data["property_type"]),
+                    deal_type=DealType(data["deal_type"]),
+                    price=data["price"],
+                    currency="RUB",
+                    area_m2=data.get("area_m2"),
+                    rooms=data.get("rooms"),
+                    floor=data.get("floor"),
+                    floors_total=data.get("floors_total"),
+                    address=data["address"],
+                    district=data.get("district"),
+                    city=data["city"],
+                    description=data.get("description"),
+                    lat=data.get("lat"),
+                    lon=data.get("lon"),
+                )
+                session.add(listing)
+            await session.commit()
+            log.info(f"✅ Seeded {len(SAMPLE_LISTINGS)} listings")
+
     yield
 
 
