@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import dynamic from 'next/dynamic';
 
@@ -10,68 +10,49 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 /* ═══ Types ═══════════════════════════════════════════════════ */
 
-interface Message {
-  role: 'user' | 'agent';
-  text: string;
-  filters?: Record<string, any>;
-}
-
 interface Listing {
-  id: string;
-  source: string;
-  source_url: string;
-  property_type: string;
-  deal_type: string;
-  price: number;
-  currency: string;
-  area_m2: number | null;
-  rooms: number | null;
-  floor: number | null;
-  floors_total: number | null;
-  address: string;
-  city: string;
-  district: string | null;
-  region: string | null;
-  description: string | null;
-  images: string[];
-  lat: number | null;
-  lon: number | null;
-  features: Record<string, any>;
-  created_at: string;
+  id: string; source: string; source_url: string; property_type: string;
+  deal_type: string; price: number; currency: string; area_m2: number | null;
+  rooms: number | null; floor: number | null; floors_total: number | null;
+  address: string; city: string; district: string | null;
+  description: string | null; images: string[]; lat: number | null; lon: number | null;
 }
 
-interface Filters {
-  city: string;
-  deal_type: string;
-  property_type: string;
-  rooms: string;
-  price_min: string;
-  price_max: string;
-}
+interface Message { role: 'user' | 'agent'; text: string; filters?: Record<string, any>; }
 
 /* ═══ Constants ═══════════════════════════════════════════════ */
+
+const CITIES: { name: string; lat: number; lon: number; zoom: number }[] = [
+  { name: 'Москва', lat: 55.75, lon: 37.62, zoom: 10 },
+  { name: 'Санкт-Петербург', lat: 59.93, lon: 30.32, zoom: 10 },
+  { name: 'Новосибирск', lat: 55.03, lon: 82.92, zoom: 11 },
+  { name: 'Екатеринбург', lat: 56.84, lon: 60.60, zoom: 11 },
+  { name: 'Казань', lat: 55.79, lon: 49.12, zoom: 11 },
+  { name: 'Краснодар', lat: 45.04, lon: 38.98, zoom: 11 },
+  { name: 'Сочи', lat: 43.60, lon: 39.73, zoom: 12 },
+  { name: 'Самара', lat: 53.20, lon: 50.15, zoom: 11 },
+  { name: 'Уфа', lat: 54.74, lon: 55.97, zoom: 11 },
+  { name: 'Владивосток', lat: 43.12, lon: 131.89, zoom: 11 },
+];
 
 const PROPERTY_LABELS: Record<string, string> = {
   apartment: 'Квартира', house: 'Дом', commercial: 'Коммерция',
   land: 'Участок', room: 'Комната', studio: 'Студия',
 };
+const DEAL_LABELS: Record<string, string> = { sale: 'Продажа', rent: 'Аренда' };
 
-const DEAL_LABELS: Record<string, string> = {
-  sale: 'Продажа', rent: 'Аренда',
+const SOURCE_COLORS: Record<string, string> = {
+  cian: '#00a0e1', domclick: '#ff6a00', avito: '#ff4f00',
+  n1: '#6e2fee', yandex: '#fc3f1d', irr: '#4caf50', bn: '#2196f3',
+  seed: '#9e9e9e',
 };
 
-const CITIES = [
-  'Москва', 'Санкт-Петербург', 'Новосибирск', 'Екатеринбург',
-  'Казань', 'Краснодар', 'Сочи', 'Самара', 'Уфа', 'Владивосток',
-];
-
-const SUGGESTIONS = [
-  '2-комнатная квартира в Москве до 10 млн',
-  'Студия в Санкт-Петербурге в аренду',
-  'Сравни цены в Москве и Питере',
-  'Аналитика по Краснодару',
-  'Сколько объявлений на платформе?',
-  'Дом в Сочи до 15 млн',
+const AI_STEPS = [
+  { key: 'city', question: '🏙️ В каком городе ищете недвижимость?', options: ['Москва', 'Санкт-Петербург', 'Краснодар', 'Сочи', 'Другой'] },
+  { key: 'deal', question: '💰 Покупка или аренда?', options: ['Покупка', 'Аренда'] },
+  { key: 'type', question: '🏢 Какой тип недвижимости?', options: ['Квартира', 'Студия', 'Дом', 'Коммерция', 'Любой'] },
+  { key: 'rooms', question: '🚪 Сколько комнат?', options: ['1', '2', '3', '4+', 'Любое'] },
+  { key: 'budget', question: '💳 Какой бюджет?', options: ['До 5 млн', '5-10 млн', '10-20 млн', '20+ млн', 'Не важно'] },
 ];
 
 /* ═══ Helpers ═════════════════════════════════════════════════ */
@@ -84,167 +65,69 @@ function formatPrice(price: number, dealType?: string): string {
     const mln = price / 1_000_000;
     return mln % 1 === 0 ? `${mln} млн ₽` : `${mln.toFixed(1)} млн ₽`;
   }
-  if (price >= 1_000) {
-    return (price / 1_000).toFixed(0) + ' тыс ₽';
-  }
-  return price + ' ₽';
+  return new Intl.NumberFormat('ru-RU').format(price) + ' ₽';
 }
 
-/* ═══ Skeleton ════════════════════════════════════════════════ */
-
-function CardSkeleton() {
-  return (
-    <div className="bg-white rounded-xl border border-gray-200 p-4 animate-pulse">
-      <div className="h-40 bg-gray-200 rounded-lg mb-3" />
-      <div className="h-6 bg-gray-200 rounded w-1/2 mb-2" />
-      <div className="h-4 bg-gray-100 rounded w-1/3 mb-2" />
-      <div className="h-4 bg-gray-100 rounded w-2/3 mb-2" />
-      <div className="h-4 bg-gray-100 rounded w-full" />
-    </div>
-  );
+function formatPriceShort(price: number): string {
+  if (price >= 1_000_000) return (price / 1_000_000).toFixed(1) + 'М';
+  if (price >= 1_000) return (price / 1_000).toFixed(0) + 'К';
+  return String(price);
 }
 
-function SkeletonGrid() {
+/* ═══ City Popup ══════════════════════════════════════════════ */
+
+function CityPopup({ onSelect }: { onSelect: (city: string) => void }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      {[1, 2, 3, 4, 5, 6].map(i => <CardSkeleton key={i} />)}
-    </div>
-  );
-}
+    <div className="fixed inset-0 z-[100] bg-black/50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+        <h2 className="text-2xl font-bold text-center mb-2">🏠 Realty AI</h2>
+        <p className="text-gray-500 text-center mb-6">Выберите город для начала работы</p>
 
-/* ═══ Detail View ═════════════════════════════════════════════ */
-
-function DetailView({ listing, onBack }: { listing: Listing; onBack: () => void }) {
-  const [imgIdx, setImgIdx] = useState(0);
-  const images = listing.images?.length ? listing.images : [];
-
-  return (
-    <div className="min-h-full bg-gray-50">
-      {/* Header */}
-      <div className="bg-white border-b sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-4">
-          <button onClick={onBack} className="text-blue-600 hover:text-blue-800 text-sm font-medium">
-            ← Назад
-          </button>
-          <h1 className="text-lg font-semibold truncate">
-            {PROPERTY_LABELS[listing.property_type]} • {listing.city}
-          </h1>
+        <div className="space-y-2">
+          {CITIES.map(c => (
+            <button key={c.name} onClick={() => onSelect(c.name)}
+              className="w-full text-left px-4 py-3 rounded-xl border border-gray-200 hover:border-blue-400 hover:bg-blue-50 transition flex items-center justify-between group">
+              <span className="font-medium">{c.name}</span>
+              <span className="text-gray-400 group-hover:text-blue-600 transition">→</span>
+            </button>
+          ))}
         </div>
       </div>
+    </div>
+  );
+}
 
-      <div className="max-w-5xl mx-auto px-4 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Images */}
-            {images.length > 0 ? (
-              <div>
-                <div className="aspect-video bg-gray-100 rounded-xl overflow-hidden">
-                  <img src={images[imgIdx]} alt="" className="w-full h-full object-cover" />
-                </div>
-                {images.length > 1 && (
-                  <div className="flex gap-2 mt-3 overflow-x-auto pb-2">
-                    {images.map((img, i) => (
-                      <button key={i} onClick={() => setImgIdx(i)}
-                        className={`flex-shrink-0 w-20 h-16 rounded-lg overflow-hidden border-2 transition ${i === imgIdx ? 'border-blue-500' : 'border-transparent'}`}>
-                        <img src={img} alt="" className="w-full h-full object-cover" />
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="aspect-video bg-gray-100 rounded-xl flex items-center justify-center">
-                <span className="text-6xl">🏢</span>
-              </div>
-            )}
+/* ═══ Marker Hover Card ═══════════════════════════════════════ */
 
-            {/* Description */}
-            {listing.description && (
-              <div className="bg-white rounded-xl border p-6">
-                <h2 className="font-semibold mb-3">Описание</h2>
-                <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{listing.description}</p>
-              </div>
-            )}
-
-            {/* Features */}
-            {listing.features && Object.keys(listing.features).length > 0 && (
-              <div className="bg-white rounded-xl border p-6">
-                <h2 className="font-semibold mb-3">Характеристики</h2>
-                <div className="grid grid-cols-2 gap-3">
-                  {Object.entries(listing.features).map(([k, v]) => (
-                    <div key={k} className="text-sm">
-                      <span className="text-gray-500">{k}:</span> <span className="font-medium">{String(v)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Map */}
-            {listing.lat && listing.lon && (
-              <div className="bg-white rounded-xl border p-6">
-                <h2 className="font-semibold mb-3">📍 На карте</h2>
-                <div className="h-80 rounded-lg overflow-hidden">
-                  <MapView lat={listing.lat} lon={listing.lon} address={`${listing.city}, ${listing.address}`} />
-                </div>
-              </div>
-            )}
+function HoverCard({ listing, onClose }: { listing: Listing; onClose: () => void }) {
+  return (
+    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-xl shadow-xl border w-72 overflow-hidden">
+        <div className="h-32 bg-gray-100 relative">
+          {listing.images?.[0] ? (
+            <img src={listing.images[0]} alt="" className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-3xl">🏢</div>
+          )}
+          <span className="absolute top-2 left-2 text-white text-xs font-bold px-2 py-1 rounded"
+            style={{ background: SOURCE_COLORS[listing.source] || '#666' }}>
+            {listing.source}
+          </span>
+          <button onClick={onClose} className="absolute top-2 right-2 bg-white/80 w-6 h-6 rounded-full flex items-center justify-center text-xs hover:bg-white">✕</button>
+        </div>
+        <div className="p-3">
+          <div className="text-lg font-bold text-blue-600">{formatPrice(listing.price, listing.deal_type)}</div>
+          <div className="text-sm text-gray-500 mt-0.5">
+            {listing.rooms !== null ? (listing.rooms === 0 ? 'Студия' : `${listing.rooms}-комн.`) : PROPERTY_LABELS[listing.property_type]}
+            {listing.area_m2 && ` • ${listing.area_m2} м²`}
+            {listing.floor && ` • ${listing.floor}/${listing.floors_total} этаж`}
           </div>
-
-          {/* Right sidebar */}
-          <div className="space-y-4">
-            <div className="bg-white rounded-xl border p-6 sticky top-20">
-              <div className="text-3xl font-bold text-blue-600 mb-1">
-                {formatPrice(listing.price, listing.deal_type)}
-              </div>
-              <div className="text-sm text-gray-500 mb-4">
-                {DEAL_LABELS[listing.deal_type]} • {PROPERTY_LABELS[listing.property_type]}
-              </div>
-
-              <div className="space-y-3 mb-6">
-                {listing.rooms !== null && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">Комнаты</span>
-                    <span className="font-medium">{listing.rooms === 0 ? 'Студия' : listing.rooms}</span>
-                  </div>
-                )}
-                {listing.area_m2 && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">Площадь</span>
-                    <span className="font-medium">{listing.area_m2} м²</span>
-                  </div>
-                )}
-                {listing.floor && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">Этаж</span>
-                    <span className="font-medium">{listing.floor}/{listing.floors_total}</span>
-                  </div>
-                )}
-                {listing.area_m2 && listing.area_m2 > 0 && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">Цена за м²</span>
-                    <span className="font-medium">
-                      {new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(listing.price / listing.area_m2)} ₽
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              <div className="border-t pt-4 mb-4">
-                <div className="text-sm text-gray-700">📍 {listing.city}</div>
-                <div className="text-sm text-gray-500 mt-1">{listing.address}</div>
-                {listing.district && <div className="text-sm text-gray-400 mt-1">{listing.district}</div>}
-              </div>
-
-              <a href={listing.source_url} target="_blank" rel="noopener noreferrer"
-                className="block w-full bg-blue-600 text-white text-center py-3 rounded-xl font-medium hover:bg-blue-700 transition">
-                Смотреть на {listing.source} ↗
-              </a>
-
-              <p className="text-xs text-gray-400 mt-3 text-center">Источник: {listing.source}</p>
-            </div>
-          </div>
+          <div className="text-xs text-gray-400 mt-1">📍 {listing.city}, {listing.address}</div>
+          {listing.description && <p className="text-xs text-gray-400 mt-1 line-clamp-2">{listing.description}</p>}
+          <a href={listing.source_url} target="_blank" rel="noopener noreferrer"
+            className="block mt-2 text-center bg-blue-600 text-white text-xs py-2 rounded-lg hover:bg-blue-700 transition">
+            Открыть на {listing.source} ↗
+          </a>
         </div>
       </div>
     </div>
@@ -254,415 +137,444 @@ function DetailView({ listing, onBack }: { listing: Listing; onBack: () => void 
 /* ═══ Main Component ═════════════════════════════════════════ */
 
 export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([
-    { role: 'agent', text: '👋 Привет! Я AI-помощник по недвижимости.\n\nСпросите что угодно или выберите быстрый запрос:' },
-  ]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
+  /* ── State ─────────────────────────────────────────────── */
+  const [showCityPopup, setShowCityPopup] = useState(() => {
+    if (typeof window !== 'undefined') return !localStorage.getItem('nedvig_city');
+    return true;
+  });
+  const [selectedCity, setSelectedCity] = useState(() => {
+    if (typeof window !== 'undefined') return localStorage.getItem('nedvig_city') || '';
+    return '';
+  });
+  const [mapCenter, setMapCenter] = useState<[number, number]>(() => {
+    const city = CITIES.find(c => c.name === selectedCity);
+    return city ? [city.lat, city.lon] : [55.75, 37.62];
+  });
+  const [mapZoom, setMapZoom] = useState(() => {
+    const city = CITIES.find(c => c.name === selectedCity);
+    return city ? city.zoom : 10;
+  });
+
   const [listings, setListings] = useState<Listing[]>([]);
   const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [view, setView] = useState<'chat' | 'listings' | 'detail'>('chat');
-  const [selectedListing, setSelectedListing] = useState<Listing | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [filters, setFilters] = useState<Filters>({
-    city: '', deal_type: '', property_type: '', rooms: '', price_min: '', price_max: '',
-  });
-  const [showSkeleton, setShowSkeleton] = useState(false);
-  const [coldStart, setColdStart] = useState(false);
-  const chatEnd = useRef<HTMLDivElement>(null);
-  const coldStartTimer = useRef<NodeJS.Timeout | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarTab, setSidebarTab] = useState<'chat' | 'filters'>('filters');
+  const [hoveredListing, setHoveredListing] = useState<Listing | null>(null);
 
+  /* AI chat state */
+  const [messages, setMessages] = useState<Message[]>([
+    { role: 'agent', text: '👋 Привет! Я помогу подобрать недвижимость. Давайте пошагово определим ваши параметры.' },
+  ]);
+  const [aiStep, setAiStep] = useState(0);
+  const [aiAnswers, setAiAnswers] = useState<Record<string, string>>({});
+  const [aiInput, setAiInput] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const chatEnd = useRef<HTMLDivElement>(null);
+
+  /* Manual filter state */
+  const [fDeal, setFDeal] = useState('');
+  const [fType, setFType] = useState('');
+  const [fRooms, setFRooms] = useState('');
+  const [fPriceMin, setFPriceMin] = useState('');
+  const [fPriceMax, setFPriceMax] = useState('');
+
+  /* ── Effects ───────────────────────────────────────────── */
   useEffect(() => {
     chatEnd.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  /* ── Cold start ───────────────────────────────────────── */
-  const startColdTimer = useCallback(() => {
-    setColdStart(false);
-    coldStartTimer.current = setTimeout(() => setColdStart(true), 8000);
-  }, []);
-
-  const clearColdTimer = useCallback(() => {
-    if (coldStartTimer.current) clearTimeout(coldStartTimer.current);
-    setColdStart(false);
-  }, []);
-
-  /* ── Open detail ──────────────────────────────────────── */
-  const openDetail = async (id: string) => {
-    setDetailLoading(true);
-    setView('detail');
-    try {
-      const res = await fetch(`${API}/api/listings/${id}`);
-      if (!res.ok) throw new Error('Not found');
-      const data = await res.json();
-      setSelectedListing(data);
-    } catch {
-      setSelectedListing(null);
+  useEffect(() => {
+    if (selectedCity) {
+      const city = CITIES.find(c => c.name === selectedCity);
+      if (city) {
+        setMapCenter([city.lat, city.lon]);
+        setMapZoom(city.zoom);
+        loadListings({ city: selectedCity });
+      }
     }
-    setDetailLoading(false);
+  }, [selectedCity]);
+
+  /* ── City select ───────────────────────────────────────── */
+  const selectCity = (city: string) => {
+    setSelectedCity(city);
+    localStorage.setItem('nedvig_city', city);
+    setShowCityPopup(false);
   };
 
-  /* ── Back from detail ─────────────────────────────────── */
-  const backFromDetail = () => {
-    setSelectedListing(null);
-    setView(listings.length > 0 ? 'listings' : 'chat');
-  };
-
-  /* ── Send message ─────────────────────────────────────── */
-  const sendMessage = async (text?: string) => {
-    const query = (text || input).trim();
-    if (!query || loading) return;
-
-    setInput('');
-    setMessages(prev => [...prev, { role: 'user', text: query }]);
+  /* ── Load listings ─────────────────────────────────────── */
+  const loadListings = async (filters: Record<string, any> = {}) => {
     setLoading(true);
-    setShowSkeleton(false);
-    startColdTimer();
+    try {
+      const params = new URLSearchParams();
+      if (filters.city) params.set('city', filters.city);
+      if (filters.deal_type) params.set('deal_type', filters.deal_type);
+      if (filters.property_type) params.set('property_type', filters.property_type);
+      if (filters.rooms) params.set('rooms', String(filters.rooms));
+      if (filters.price_min) params.set('price_min', String(filters.price_min));
+      if (filters.price_max) params.set('price_max', String(filters.price_max));
+
+      const res = await fetch(`${API}/api/listings?${params}`);
+      const data = await res.json();
+      setListings(data.items || []);
+      setTotal(data.total || 0);
+    } catch (e) {
+      console.error('Load error:', e);
+    }
+    setLoading(false);
+  };
+
+  /* ── Manual search ─────────────────────────────────────── */
+  const manualSearch = () => {
+    const filters: Record<string, any> = { city: selectedCity };
+    if (fDeal) filters.deal_type = fDeal;
+    if (fType) filters.property_type = fType;
+    if (fRooms) filters.rooms = fRooms;
+    if (fPriceMin) filters.price_min = Number(fPriceMin);
+    if (fPriceMax) filters.price_max = Number(fPriceMax);
+    loadListings(filters);
+  };
+
+  /* ── AI chat flow ──────────────────────────────────────── */
+  const handleAiOption = async (option: string) => {
+    const step = AI_STEPS[aiStep];
+    const newAnswers = { ...aiAnswers, [step.key]: option };
+    setAiAnswers(newAnswers);
+
+    setMessages(prev => [...prev, { role: 'user', text: option }]);
+
+    if (aiStep < AI_STEPS.length - 1) {
+      const nextStep = AI_STEPS[aiStep + 1];
+      setMessages(prev => [...prev, { role: 'agent', text: nextStep.question }]);
+      setAiStep(aiStep + 1);
+    } else {
+      // All steps done — build query and search
+      setMessages(prev => [...prev, { role: 'agent', text: '🔍 Ищу по вашим параметрам...' }]);
+      setAiLoading(true);
+
+      const query = buildAiQuery(newAnswers);
+      try {
+        const res = await fetch(`${API}/api/agent/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query }),
+        });
+        const data = await res.json();
+        setMessages(prev => [...prev, { role: 'agent', text: data.response || 'Ничего не найдено' }]);
+
+        if (data.total > 0) {
+          const params = new URLSearchParams();
+          if (data.filters?.city) params.set('city', data.filters.city);
+          if (data.filters?.deal_type) params.set('deal_type', data.filters.deal_type);
+          if (data.filters?.property_type) params.set('property_type', data.filters.property_type);
+          if (data.filters?.rooms) params.set('rooms', String(data.filters.rooms));
+          if (data.filters?.price_max) params.set('price_max', String(data.filters.price_max));
+
+          const listRes = await fetch(`${API}/api/listings?${params}`);
+          const listData = await listRes.json();
+          setListings(listData.items || []);
+          setTotal(listData.total || 0);
+
+          // Zoom to city
+          const city = CITIES.find(c => c.name === (newAnswers.city || selectedCity));
+          if (city) {
+            setMapCenter([city.lat, city.lon]);
+            setMapZoom(city.zoom);
+          }
+        }
+      } catch {
+        setMessages(prev => [...prev, { role: 'agent', text: '❌ Ошибка соединения с сервером' }]);
+      }
+      setAiLoading(false);
+    }
+  };
+
+  const handleAiInput = async () => {
+    if (!aiInput.trim()) return;
+    const text = aiInput.trim();
+    setAiInput('');
+    setMessages(prev => [...prev, { role: 'user', text }]);
+    setAiLoading(true);
 
     try {
       const res = await fetch(`${API}/api/agent/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ query: text }),
       });
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-
-      setMessages(prev => [...prev, {
-        role: 'agent',
-        text: data.response || 'Не удалось обработать запрос',
-        filters: data.filters,
-      }]);
-
+      setMessages(prev => [...prev, { role: 'agent', text: data.response || 'Не удалось обработать' }]);
       if (data.total > 0) {
-        setShowSkeleton(true);
-        const params = buildListingsParams(data.filters);
+        const params = new URLSearchParams();
+        if (data.filters?.city) params.set('city', data.filters.city);
+        if (data.filters?.deal_type) params.set('deal_type', data.filters.deal_type);
+        if (data.filters?.property_type) params.set('property_type', data.filters.property_type);
+        if (data.filters?.rooms) params.set('rooms', String(data.filters.rooms));
         const listRes = await fetch(`${API}/api/listings?${params}`);
         const listData = await listRes.json();
         setListings(listData.items || []);
         setTotal(listData.total || 0);
-        setOffset(listData.items?.length || 0);
-        setShowSkeleton(false);
-        setView('listings');
       }
-    } catch (e) {
-      setMessages(prev => [...prev, {
-        role: 'agent',
-        text: '❌ **Ошибка соединения**\n\nСервер не отвечает. Если вы на Render Free — первый запрос может занимать до 60 секунд (cold start). Попробуйте ещё раз.',
-      }]);
-      setShowSkeleton(false);
+    } catch {
+      setMessages(prev => [...prev, { role: 'agent', text: '❌ Ошибка соединения' }]);
     }
-    clearColdTimer();
-    setLoading(false);
+    setAiLoading(false);
   };
 
-  /* ── Load more ────────────────────────────────────────── */
-  const loadMore = async () => {
-    if (loadingMore || offset >= total) return;
-    setLoadingMore(true);
-    try {
-      const params = buildListingsParams(getCurrentFilters());
-      params.set('offset', String(offset));
-      const res = await fetch(`${API}/api/listings?${params}`);
-      const data = await res.json();
-      setListings(prev => [...prev, ...(data.items || [])]);
-      setOffset(prev => prev + (data.items?.length || 0));
-    } catch { /* silent */ }
-    setLoadingMore(false);
+  const resetAi = () => {
+    setAiStep(0);
+    setAiAnswers({});
+    setMessages([{ role: 'agent', text: AI_STEPS[0].question }]);
   };
 
-  function getCurrentFilters(): Record<string, string> {
-    return messages.filter(m => m.filters).pop()?.filters || {};
-  }
-
-  function buildListingsParams(f: Record<string, any> = {}): URLSearchParams {
-    const p = new URLSearchParams();
-    if (f.city) p.set('city', f.city);
-    if (f.deal_type) p.set('deal_type', f.deal_type);
-    if (f.property_type) p.set('property_type', f.property_type);
-    if (f.price_min) p.set('price_min', String(f.price_min));
-    if (f.price_max) p.set('price_max', String(f.price_max));
-    if (f.rooms) p.set('rooms', String(f.rooms));
-    return p;
-  }
-
-  /* ── Filter search ────────────────────────────────────── */
-  const applyFilters = async () => {
+  function buildAiQuery(answers: Record<string, string>): string {
     const parts: string[] = [];
-    if (filters.city) parts.push(filters.city);
-    if (filters.property_type) parts.push(PROPERTY_LABELS[filters.property_type] || filters.property_type);
-    if (filters.deal_type) parts.push(filters.deal_type === 'rent' ? 'в аренду' : 'купить');
-    if (filters.rooms) parts.push(`${filters.rooms}-комнатная`);
-    if (filters.price_max) parts.push(`до ${Number(filters.price_max) / 1_000_000} млн`);
-    if (parts.length === 0) return;
-    await sendMessage(parts.join(' '));
-    setSidebarOpen(false);
+    if (answers.city && answers.city !== 'Другой') parts.push(answers.city);
+    if (answers.deal === 'Аренду' || answers.deal === 'Аренда') parts.push('в аренду');
+    else if (answers.deal) parts.push('купить');
+    if (answers.type && answers.type !== 'Любой') parts.push(answers.type.toLowerCase());
+    if (answers.rooms && answers.rooms !== 'Любое') parts.push(`${answers.rooms}-комнатная`);
+    if (answers.budget && answers.budget !== 'Не важно') {
+      const budgetMap: Record<string, string> = {
+        'До 5 млн': 'до 5 млн', '5-10 млн': 'от 5 до 10 млн',
+        '10-20 млн': 'от 10 до 20 млн', '20+ млн': 'от 20 млн',
+      };
+      if (budgetMap[answers.budget]) parts.push(budgetMap[answers.budget]);
+    }
+    return parts.join(' ') || 'квартира';
+  }
+
+  /* ── Map marker click ──────────────────────────────────── */
+  const onMarkerClick = (listing: Listing) => {
+    setHoveredListing(prev => prev?.id === listing.id ? null : listing);
   };
 
   /* ═══ RENDER ════════════════════════════════════════════ */
 
-  // Detail view
-  if (view === 'detail') {
-    return (
-      <div className="flex h-screen overflow-hidden">
-        {/* Sidebar (hidden on detail) */}
-        <aside className="hidden lg:flex w-72 bg-white border-r flex-col">
-          <div className="p-4 border-b">
-            <h1 className="text-xl font-bold text-blue-600">🏠 Realty AI</h1>
-          </div>
-          <div className="p-4 flex-1 flex items-center justify-center text-gray-400 text-sm">
-            <button onClick={backFromDetail} className="text-blue-600 hover:underline">
-              ← Вернуться к результатам
+  return (
+    <div className="h-screen flex flex-col overflow-hidden bg-gray-50">
+      {/* City popup */}
+      {showCityPopup && <CityPopup onSelect={selectCity} />}
+
+      {/* ═══ Top Bar ═══════════════════════════════════════ */}
+      <header className="h-14 bg-white border-b flex items-center px-4 gap-4 z-20 flex-shrink-0">
+        <button className="lg:hidden p-1" onClick={() => setSidebarOpen(!sidebarOpen)}>
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+
+        <h1 className="text-lg font-bold text-blue-600 flex-shrink-0">🏠 Realty AI</h1>
+
+        {/* City selector */}
+        <button onClick={() => setShowCityPopup(true)}
+          className="flex items-center gap-1 text-sm text-gray-600 hover:text-blue-600 transition">
+          📍 {selectedCity || 'Выберите город'}
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        <div className="flex-1" />
+
+        {/* Stats */}
+        <div className="hidden md:flex items-center gap-4 text-sm text-gray-500">
+          <span>🏢 {total} объявлений</span>
+          <span className="text-xs bg-gray-100 px-2 py-1 rounded">7 источников</span>
+        </div>
+      </header>
+
+      <div className="flex-1 flex overflow-hidden relative">
+        {/* ═══ Sidebar ═════════════════════════════════════ */}
+        <aside className={`
+          fixed lg:static inset-y-14 left-0 z-30 w-80 bg-white border-r
+          flex flex-col transform transition-transform duration-200
+          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0 lg:w-0 lg:border-0'}
+          ${!sidebarOpen ? 'lg:overflow-hidden' : ''}
+        `}>
+          {/* Tabs */}
+          <div className="flex border-b">
+            <button onClick={() => setSidebarTab('filters')}
+              className={`flex-1 py-3 text-sm font-medium ${sidebarTab === 'filters' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>
+              🔍 Поиск
+            </button>
+            <button onClick={() => setSidebarTab('chat')}
+              className={`flex-1 py-3 text-sm font-medium ${sidebarTab === 'chat' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>
+              🤖 AI-Чат
             </button>
           </div>
-        </aside>
 
-        <main className="flex-1 overflow-y-auto">
-          {detailLoading ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="animate-pulse text-gray-400">⏳ Загрузка объявления...</div>
-            </div>
-          ) : selectedListing ? (
-            <DetailView listing={selectedListing} onBack={backFromDetail} />
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full gap-4">
-              <p className="text-5xl">😕</p>
-              <p className="text-gray-600">Объявление не найдено</p>
-              <button onClick={backFromDetail} className="text-blue-600 hover:underline">← Назад</button>
+          {/* Filters tab */}
+          {sidebarTab === 'filters' && (
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Город</label>
+                <select value={selectedCity} onChange={e => selectCity(e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none bg-white">
+                  <option value="">Выберите город</option>
+                  {CITIES.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Тип сделки</label>
+                <div className="flex gap-2">
+                  <button onClick={() => setFDeal(fDeal === 'sale' ? '' : 'sale')}
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium border transition ${fDeal === 'sale' ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-200 hover:border-blue-300'}`}>
+                    Покупка
+                  </button>
+                  <button onClick={() => setFDeal(fDeal === 'rent' ? '' : 'rent')}
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium border transition ${fDeal === 'rent' ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-200 hover:border-blue-300'}`}>
+                    Аренда
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Тип недвижимости</label>
+                <select value={fType} onChange={e => setFType(e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                  <option value="">Любой</option>
+                  {Object.entries(PROPERTY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Комнаты</label>
+                <div className="flex gap-1.5">
+                  {['', '0', '1', '2', '3', '4'].map(r => (
+                    <button key={r} onClick={() => setFRooms(r === fRooms ? '' : r)}
+                      className={`flex-1 py-2 rounded-lg text-xs font-medium border transition ${r === fRooms ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-200 hover:border-blue-300'}`}>
+                      {r === '' ? 'Любое' : r === '0' ? 'Студ' : r === '4' ? '4+' : r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Цена (₽)</label>
+                <div className="flex gap-2">
+                  <input type="number" placeholder="От" value={fPriceMin} onChange={e => setFPriceMin(e.target.value)}
+                    className="w-1/2 border rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                  <input type="number" placeholder="До" value={fPriceMax} onChange={e => setFPriceMax(e.target.value)}
+                    className="w-1/2 border rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none" />
+                </div>
+              </div>
+
+              <button onClick={manualSearch} disabled={loading || !selectedCity}
+                className="w-full bg-blue-600 text-white py-3 rounded-xl font-medium hover:bg-blue-700 transition disabled:opacity-50 text-sm">
+                {loading ? '⏳ Поиск...' : '🔍 Найти'}
+              </button>
+
+              {/* Results summary */}
+              {total > 0 && (
+                <div className="text-xs text-gray-500 text-center pt-2 border-t">
+                  Найдено {total} объявлений • Показаны на карте
+                </div>
+              )}
             </div>
           )}
-        </main>
-      </div>
-    );
-  }
 
-  // Main view (chat + listings)
-  return (
-    <div className="flex h-screen overflow-hidden">
-      {/* Mobile overlay */}
-      {sidebarOpen && (
-        <div className="fixed inset-0 bg-black/30 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />
-      )}
-
-      {/* ═══ Sidebar ═══════════════════════════════════════ */}
-      <aside className={`
-        fixed lg:static inset-y-0 left-0 z-50 w-72 bg-white border-r border-gray-200
-        flex flex-col transform transition-transform duration-200 ease-in-out
-        ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-      `}>
-        <div className="p-4 border-b flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-blue-600">🏠 Realty AI</h1>
-            <p className="text-xs text-gray-400 mt-0.5">Агрегатор недвижимости</p>
-          </div>
-          <button className="lg:hidden p-1" onClick={() => setSidebarOpen(false)}>✕</button>
-        </div>
-
-        <nav className="p-2 space-y-1">
-          <button onClick={() => { setView('chat'); setSidebarOpen(false); }}
-            className={`w-full text-left px-3 py-2 rounded-lg text-sm ${view === 'chat' ? 'bg-blue-50 text-blue-700 font-medium' : 'hover:bg-gray-100'}`}>
-            💬 AI-Чат
-          </button>
-          <button onClick={() => { setView('listings'); setSidebarOpen(false); }}
-            className={`w-full text-left px-3 py-2 rounded-lg text-sm ${view === 'listings' ? 'bg-blue-50 text-blue-700 font-medium' : 'hover:bg-gray-100'}`}>
-            🏢 Объявления {total > 0 && <span className="text-xs bg-gray-200 px-1.5 py-0.5 rounded-full ml-1">{total}</span>}
-          </button>
-        </nav>
-
-        {/* Filters */}
-        <div className="p-4 border-t flex-1 overflow-y-auto">
-          <h3 className="text-xs font-semibold text-gray-500 uppercase mb-3">Фильтры</h3>
-
-          <label className="block text-xs text-gray-600 mb-1">Город</label>
-          <select value={filters.city} onChange={e => setFilters(f => ({ ...f, city: e.target.value }))}
-            className="w-full border rounded-lg px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-blue-500 focus:outline-none">
-            <option value="">Все города</option>
-            {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-
-          <label className="block text-xs text-gray-600 mb-1">Тип сделки</label>
-          <select value={filters.deal_type} onChange={e => setFilters(f => ({ ...f, deal_type: e.target.value }))}
-            className="w-full border rounded-lg px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-blue-500 focus:outline-none">
-            <option value="">Все</option>
-            <option value="sale">Продажа</option>
-            <option value="rent">Аренда</option>
-          </select>
-
-          <label className="block text-xs text-gray-600 mb-1">Тип недвижимости</label>
-          <select value={filters.property_type} onChange={e => setFilters(f => ({ ...f, property_type: e.target.value }))}
-            className="w-full border rounded-lg px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-blue-500 focus:outline-none">
-            <option value="">Все</option>
-            {Object.entries(PROPERTY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select>
-
-          <label className="block text-xs text-gray-600 mb-1">Комнаты</label>
-          <select value={filters.rooms} onChange={e => setFilters(f => ({ ...f, rooms: e.target.value }))}
-            className="w-full border rounded-lg px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-blue-500 focus:outline-none">
-            <option value="">Любое</option>
-            <option value="0">Студия</option>
-            <option value="1">1</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-            <option value="4">4+</option>
-          </select>
-
-          <label className="block text-xs text-gray-600 mb-1">Цена (₽)</label>
-          <div className="flex gap-2 mb-3">
-            <input type="number" placeholder="От" value={filters.price_min}
-              onChange={e => setFilters(f => ({ ...f, price_min: e.target.value }))}
-              className="w-1/2 border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none" />
-            <input type="number" placeholder="До" value={filters.price_max}
-              onChange={e => setFilters(f => ({ ...f, price_max: e.target.value }))}
-              className="w-1/2 border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none" />
-          </div>
-
-          <button onClick={applyFilters}
-            className="w-full bg-blue-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition">
-            🔍 Найти
-          </button>
-        </div>
-
-        <div className="p-3 border-t text-xs text-gray-400 text-center">
-          MVP v0.2 • {total} объявлений
-        </div>
-      </aside>
-
-      {/* ═══ Main ══════════════════════════════════════════ */}
-      <main className="flex-1 flex flex-col min-w-0">
-        {/* Mobile header */}
-        <div className="lg:hidden flex items-center gap-3 p-3 border-b bg-white">
-          <button onClick={() => setSidebarOpen(true)} className="p-1">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
-          <h1 className="font-bold text-blue-600">🏠 Realty AI</h1>
-        </div>
-
-        {view === 'chat' ? (
-          <>
-            <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-3">
-              {messages.map((msg, i) => (
-                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`chat-bubble ${msg.role} max-w-[85%] md:max-w-[70%]`}>
-                    {msg.role === 'agent' ? (
-                      <ReactMarkdown className="prose prose-sm max-w-none">{msg.text}</ReactMarkdown>
-                    ) : msg.text}
+          {/* AI Chat tab */}
+          {sidebarTab === 'chat' && (
+            <div className="flex-1 flex flex-col">
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {messages.map((msg, i) => (
+                  <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[90%] px-4 py-2.5 rounded-2xl text-sm ${msg.role === 'user'
+                        ? 'bg-blue-600 text-white rounded-br-md'
+                        : 'bg-gray-100 text-gray-800 rounded-bl-md'
+                      }`}>
+                      {msg.role === 'agent' ? (
+                        <ReactMarkdown className="prose prose-sm max-w-none">{msg.text}</ReactMarkdown>
+                      ) : msg.text}
+                    </div>
                   </div>
-                </div>
-              ))}
-
-              {coldStart && loading && (
-                <div className="flex justify-start">
-                  <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 px-4 py-2 rounded-xl text-sm">
-                    ⏳ Сервер просыпается (Render Free — cold start до 60 сек)...
-                  </div>
-                </div>
-              )}
-
-              {loading && !coldStart && (
-                <div className="flex justify-start">
-                  <div className="chat-bubble agent animate-pulse">⏳ Ищу...</div>
-                </div>
-              )}
-
-              {showSkeleton && <SkeletonGrid />}
-              <div ref={chatEnd} />
-            </div>
-
-            {/* Suggestions */}
-            {messages.length <= 2 && (
-              <div className="px-4 pb-2 flex flex-wrap gap-2">
-                {SUGGESTIONS.map((s, i) => (
-                  <button key={i} onClick={() => sendMessage(s)}
-                    className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-full transition truncate max-w-xs">
-                    {s}
-                  </button>
                 ))}
-              </div>
-            )}
 
-            {/* Input */}
-            <div className="border-t bg-white p-3 md:p-4">
-              <div className="flex gap-2 max-w-3xl mx-auto">
-                <input value={input} onChange={e => setInput(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-                  placeholder="Спросите о недвижимости..."
-                  className="flex-1 border rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  disabled={loading} />
-                <button onClick={() => sendMessage()} disabled={loading || !input.trim()}
-                  className="bg-blue-600 text-white px-5 py-3 rounded-xl hover:bg-blue-700 disabled:opacity-50 transition text-sm font-medium">
-                  →
+                {/* AI options */}
+                {!aiLoading && aiStep < AI_STEPS.length && (
+                  <div className="flex flex-wrap gap-2">
+                    {AI_STEPS[aiStep].options.map(opt => (
+                      <button key={opt} onClick={() => handleAiOption(opt)}
+                        className="text-xs bg-white border border-blue-200 text-blue-600 px-3 py-1.5 rounded-full hover:bg-blue-50 transition">
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {aiLoading && (
+                  <div className="flex justify-start">
+                    <div className="bg-gray-100 px-4 py-2.5 rounded-2xl rounded-bl-md text-sm animate-pulse">⏳ Ищу...</div>
+                  </div>
+                )}
+
+                <div ref={chatEnd} />
+              </div>
+
+              {/* Free text input */}
+              <div className="border-t p-3 flex gap-2">
+                <input value={aiInput} onChange={e => setAiInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAiInput()}
+                  placeholder="Или напишите запрос..."
+                  className="flex-1 border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <button onClick={handleAiInput}
+                  className="bg-blue-600 text-white px-4 rounded-xl hover:bg-blue-700 transition text-sm">→</button>
+              </div>
+
+              {/* Reset */}
+              <div className="px-4 pb-3">
+                <button onClick={resetAi} className="text-xs text-gray-400 hover:text-gray-600 transition">
+                  🔄 Начать заново
                 </button>
               </div>
             </div>
-          </>
-        ) : (
-          /* ═══ Listings ════════════════════════════════════ */
-          <div className="flex-1 overflow-y-auto p-4 md:p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold">Объявления ({total})</h2>
-            </div>
+          )}
+        </aside>
 
-            {listings.length === 0 ? (
-              <div className="text-center text-gray-400 mt-20">
-                <p className="text-5xl mb-4">🏠</p>
-                <p className="text-lg mb-2">Нет объявлений</p>
-                <p className="text-sm">Попросите AI-агента что-нибудь найти или используйте фильтры</p>
-              </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {listings.map(item => (
-                    <div key={item.id} onClick={() => openDetail(item.id)}
-                      className="listing-card group cursor-pointer">
-                      <div className="h-40 bg-gray-100 rounded-lg mb-3 flex items-center justify-center overflow-hidden relative">
-                        {item.images?.[0] ? (
-                          <img src={item.images[0]} alt="" className="w-full h-full object-cover" />
-                        ) : (
-                          <span className="text-4xl">🏢</span>
-                        )}
-                        <span className="absolute top-2 right-2 bg-white/80 text-gray-500 text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition">
-                          ↗ {item.source}
-                        </span>
-                      </div>
-
-                      <div className="price">{formatPrice(item.price, item.deal_type)}</div>
-                      <div className="meta">
-                        {PROPERTY_LABELS[item.property_type]} • {DEAL_LABELS[item.deal_type]}
-                      </div>
-                      <div className="mt-2 text-sm">
-                        {item.rooms !== null && <span className="font-medium">{item.rooms === 0 ? 'Студия' : `${item.rooms}-комн.`}</span>}
-                        {item.area_m2 && <span> • {item.area_m2} м²</span>}
-                        {item.floor && <span> • этаж {item.floor}/{item.floors_total}</span>}
-                      </div>
-                      <div className="mt-2 text-sm text-gray-600">📍 {item.city}, {item.address}</div>
-                      {item.description && <p className="mt-2 text-xs text-gray-400 line-clamp-2">{item.description}</p>}
-                      <div className="mt-3 flex items-center justify-between">
-                        <span className="text-xs bg-gray-100 px-2 py-1 rounded">{item.source}</span>
-                        <span className="text-xs text-blue-600 opacity-0 group-hover:opacity-100 transition">Подробнее →</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {offset < total && (
-                  <div className="mt-6 text-center">
-                    <button onClick={loadMore} disabled={loadingMore}
-                      className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-6 py-3 rounded-xl text-sm font-medium transition disabled:opacity-50">
-                      {loadingMore ? '⏳ Загрузка...' : `Показать ещё (${total - offset} осталось)`}
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
+        {/* Mobile sidebar overlay */}
+        {sidebarOpen && (
+          <div className="fixed inset-0 bg-black/20 z-20 lg:hidden" onClick={() => setSidebarOpen(false)} />
         )}
-      </main>
+
+        {/* ═══ Map ═════════════════════════════════════════ */}
+        <div className="flex-1 relative">
+          <MapView
+            center={mapCenter}
+            zoom={mapZoom}
+            listings={listings}
+            hoveredId={hoveredListing?.id || null}
+            onMarkerClick={onMarkerClick}
+            sourceColors={SOURCE_COLORS}
+          />
+
+          {/* Hover card */}
+          {hoveredListing && (
+            <div className="absolute top-4 right-4 z-50">
+              <HoverCard listing={hoveredListing} onClose={() => setHoveredListing(null)} />
+            </div>
+          )}
+
+          {/* Loading overlay */}
+          {loading && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-white shadow-lg rounded-full px-4 py-2 text-sm text-gray-600 flex items-center gap-2">
+              <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+              Загрузка...
+            </div>
+          )}
+
+          {/* Toggle sidebar button */}
+          {!sidebarOpen && (
+            <button onClick={() => setSidebarOpen(true)}
+              className="absolute top-4 left-4 z-30 bg-white shadow-lg rounded-xl p-3 hover:bg-gray-50 transition">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

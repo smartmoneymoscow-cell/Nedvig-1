@@ -7,9 +7,14 @@ from app.scrapers.domclick_scraper import DomClickScraper
 from app.scrapers.cian_scraper import CianScraper
 from app.scrapers.avito_scraper import AvitoScraper
 from app.scrapers.n1_scraper import N1Scraper
+from app.scrapers.yandex_scraper import YandexRealtyScraper
+from app.scrapers.irr_scraper import IrrScraper
+from app.scrapers.bn_scraper import BnScraper
 from app.scrapers.base import ScrapedItem
 
 log = logging.getLogger("realty")
+
+ALL_SOURCES = ["cian", "domclick", "avito", "n1", "yandex", "irr", "bn"]
 
 
 class ScraperRunner:
@@ -33,30 +38,19 @@ class ScraperRunner:
         sources: Optional[list[str]] = None,
         max_pages: int = 3,
     ) -> dict:
-        """
-        Scrape a city from all (or specified) sources in parallel.
-        
-        Returns:
-            {
-                "city": str,
-                "deal_type": str,
-                "by_source": {"domclick": [...], "cian": [...], ...},
-                "total_raw": int,
-                "total_deduped": int,
-                "items": [ScrapedItem, ...],
-            }
-        """
         available_scrapers = {
             "domclick": lambda: DomClickScraper(proxy=self._get_proxy()),
             "cian": lambda: CianScraper(proxy=self._get_proxy()),
             "avito": lambda: AvitoScraper(proxy=self._get_proxy()),
             "n1": lambda: N1Scraper(proxy=self._get_proxy()),
+            "yandex": lambda: YandexRealtyScraper(),
+            "irr": lambda: IrrScraper(),
+            "bn": lambda: BnScraper(),
         }
 
         active_sources = sources or list(available_scrapers.keys())
         scrapers = {name: available_scrapers[name]() for name in active_sources if name in available_scrapers}
 
-        # Run all scrapers in parallel
         tasks = {}
         for name, scraper in scrapers.items():
             tasks[name] = asyncio.create_task(
@@ -67,12 +61,10 @@ class ScraperRunner:
         for name, task in tasks.items():
             results[name] = await task
 
-        # Collect all items
         all_items = []
         for name, items in results.items():
             all_items.extend(items)
 
-        # Deduplicate by (city, address, price, rooms)
         deduped = self._deduplicate(all_items)
 
         return {
@@ -91,7 +83,6 @@ class ScraperRunner:
         sources: Optional[list[str]] = None,
         max_pages: int = 2,
     ) -> dict:
-        """Scrape multiple cities."""
         all_items = []
         city_results = {}
 
@@ -103,7 +94,6 @@ class ScraperRunner:
                 "total": result["total_deduped"],
             }
             all_items.extend(result["items"])
-            # Delay between cities to be respectful
             await asyncio.sleep(5)
 
         return {
@@ -115,7 +105,6 @@ class ScraperRunner:
     async def _safe_scrape(
         self, scraper, name: str, city: str, deal_type: str, max_pages: int
     ) -> list[ScrapedItem]:
-        """Run a scraper with error handling."""
         try:
             items = await scraper.scrape_listings(city, deal_type, max_pages)
             return items
@@ -129,19 +118,16 @@ class ScraperRunner:
                 pass
 
     def _deduplicate(self, items: list[ScrapedItem]) -> list[ScrapedItem]:
-        """Remove duplicates by source+id and content hash."""
         seen_keys = set()
         seen_content = set()
         unique = []
 
         for item in items:
-            # Primary: source + source_id
             key = f"{item.source}:{item.source_id}"
             if key in seen_keys:
                 continue
             seen_keys.add(key)
 
-            # Secondary: content hash (city + address + price + rooms)
             content = f"{item.city}:{item.address}:{item.price}:{item.rooms}:{item.area_m2}"
             import hashlib
             content_hash = hashlib.md5(content.encode()).hexdigest()

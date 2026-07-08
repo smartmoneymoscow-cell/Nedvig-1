@@ -2,117 +2,50 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --foreground: #171717;
-  --background: #ffffff;
-}
+* { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: #f8f9fb;
+  color: #1a1d23;
 }
 
-/* ═══ Chat bubbles ═══ */
-.chat-bubble {
-  max-width: 80%;
-  padding: 12px 16px;
-  border-radius: 16px;
-  margin-bottom: 8px;
-  line-height: 1.5;
+/* ═══ Leaflet custom ═══ */
+.custom-marker {
+  background: none !important;
+  border: none !important;
 }
 
-.chat-bubble.user {
-  background: #2563eb;
-  color: white;
-  margin-left: auto;
-  border-bottom-right-radius: 4px;
-  white-space: pre-wrap;
+.custom-tooltip {
+  background: white !important;
+  border: none !important;
+  border-radius: 12px !important;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.12) !important;
+  padding: 10px 14px !important;
+  font-family: 'Inter', system-ui, sans-serif !important;
 }
 
-.chat-bubble.agent {
-  background: #f3f4f6;
-  color: #1f2937;
-  border-bottom-left-radius: 4px;
+.custom-tooltip .leaflet-tooltip-arrow {
+  display: none;
 }
 
-/* Markdown inside agent bubbles */
-.chat-bubble.agent h1,
-.chat-bubble.agent h2,
-.chat-bubble.agent h3 {
-  font-weight: 700;
-  margin-top: 0.5em;
-  margin-bottom: 0.25em;
+.leaflet-container {
+  z-index: 0;
+  font-family: 'Inter', system-ui, sans-serif;
 }
 
-.chat-bubble.agent h1 { font-size: 1.1em; }
-.chat-bubble.agent h2 { font-size: 1.05em; }
-.chat-bubble.agent h3 { font-size: 1em; }
+/* ═══ Scrollbar ═══ */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
 
-.chat-bubble.agent p {
-  margin-bottom: 0.5em;
-}
-
-.chat-bubble.agent p:last-child {
-  margin-bottom: 0;
-}
-
-.chat-bubble.agent ul,
-.chat-bubble.agent ol {
-  padding-left: 1.25em;
-  margin-bottom: 0.5em;
-}
-
-.chat-bubble.agent li {
-  margin-bottom: 0.15em;
-}
-
-.chat-bubble.agent strong {
-  font-weight: 600;
-}
-
-.chat-bubble.agent em {
-  font-style: italic;
-}
-
-.chat-bubble.agent code {
-  background: rgba(0,0,0,0.06);
-  padding: 1px 4px;
-  border-radius: 4px;
-  font-size: 0.9em;
-}
-
-.chat-bubble.agent pre {
-  background: rgba(0,0,0,0.06);
-  padding: 8px 12px;
-  border-radius: 8px;
-  overflow-x: auto;
-  margin-bottom: 0.5em;
-}
-
-.chat-bubble.agent a {
-  color: #2563eb;
-  text-decoration: underline;
-}
-
-/* ═══ Listing card ═══ */
-.listing-card {
-  @apply bg-white rounded-xl border border-gray-200 p-4 hover:shadow-lg transition-shadow cursor-pointer;
-  text-decoration: none;
-  color: inherit;
-}
-
-.listing-card .price {
-  @apply text-xl font-bold text-blue-600;
-}
-
-.listing-card .meta {
-  @apply text-sm text-gray-500 mt-1;
-}
-
-.listing-card:hover .price {
-  @apply text-blue-700;
-}
+/* ═══ Markdown in chat ═══ */
+.prose p { margin-bottom: 0.4em; }
+.prose p:last-child { margin-bottom: 0; }
+.prose strong { font-weight: 600; }
+.prose ul, .prose ol { padding-left: 1.2em; margin-bottom: 0.4em; }
+.prose li { margin-bottom: 0.1em; }
+.prose a { color: #2563eb; text-decoration: underline; }
 
 /* ═══ Line clamp ═══ */
 .line-clamp-2 {
@@ -122,26 +55,17 @@ body {
   overflow: hidden;
 }
 
-.line-clamp-3 {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+/* ═══ Smooth transitions ═══ */
+button, select, input {
+  transition: all 0.15s ease;
 }
 
-/* ═══ Scrollbar ═══ */
-::-webkit-scrollbar {
-  width: 6px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #d1d5db;
-  border-radius: 3px;
+/* ═══ Animations ═══ */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-/* ═══ Leaflet fixes ═══ */
-.leaflet-container {
-  z-index: 0;
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out;
 }

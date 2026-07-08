@@ -225,6 +225,55 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     }
 
 
+# ─── Map Data ───────────────────────────────────────────────────
+
+@router.get("/api/map-data")
+async def get_map_data(
+    city: Optional[str] = None,
+    deal_type: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Lightweight endpoint for map markers — returns only coordinates + essential info."""
+    query = select(Listing).where(
+        Listing.is_active == True,
+        Listing.lat.isnot(None),
+        Listing.lon.isnot(None),
+    )
+    if city:
+        query = query.where(Listing.city == city)
+    if deal_type:
+        query = query.where(Listing.deal_type == DealType(deal_type))
+    query = query.limit(500)
+
+    result = await db.execute(query)
+    listings = result.scalars().all()
+
+    return {
+        "total": len(listings),
+        "items": [
+            {
+                "id": str(l.id),
+                "source": l.source,
+                "source_url": l.source_url,
+                "property_type": l.property_type.value if l.property_type else None,
+                "deal_type": l.deal_type.value if l.deal_type else None,
+                "price": float(l.price),
+                "area_m2": l.area_m2,
+                "rooms": l.rooms,
+                "floor": l.floor,
+                "floors_total": l.floors_total,
+                "address": l.address,
+                "city": l.city,
+                "description": l.description,
+                "images": l.images or [],
+                "lat": l.lat,
+                "lon": l.lon,
+            }
+            for l in listings
+        ],
+    }
+
+
 # ─── Seed Data (one-time) ─────────────────────────────────────
 
 @router.post("/api/admin/seed")
