@@ -62,11 +62,12 @@ ROOM_PATTERNS = [
 # ─── Price patterns ──────────────────────────────────────────────
 
 PRICE_PATTERNS = [
-    (r"от\s+(\d+[\d\s]*)\s*(?:до)\s*(\d+[\d\s]*)\s*(тыс|млн|руб)", "range"),
-    (r"от\s+(\d+[\d\s]*)\s*(тыс|млн|руб)", "min"),
-    (r"до\s+(\d+[\d\s]*)\s*(тыс|млн|руб)", "max"),
+    (r"от\s+(\d+[\d\s]*)\s*(?:до)\s*(\d+[\d\s]*)\s*(тыс|тысяч|млн|руб|рублей)", "range"),
+    (r"от\s+(\d+[\d\s]*)\s*(тыс|тысяч|млн|руб|рублей)", "min"),
+    (r"до\s+(\d+[\d\s]*)\s*(тыс|тысяч|млн|руб|рублей)", "max"),
     (r"(\d+)\s*млн", "max_mln"),
     (r"(\d+)\s*тыс", "max_thousand"),
+    (r"(\d+)\s*тысяч", "max_thousand"),
     (r"до\s+(\d{4,})", "max_raw"),
     (r"от\s+(\d{4,})", "min_raw"),
 ]
@@ -96,10 +97,10 @@ CITY_ALIASES = {
 
 def parse_price_value(value: str, unit: str) -> float:
     """Convert price string with unit to number."""
-    num = float(value.replace(" ", "").replace(",", "."))
+    num = float(value.replace(" ", "").replace(".", "").replace(",", "."))
     if "млн" in unit:
         return num * 1_000_000
-    elif "тыс" in unit:
+    elif "тыс" in unit or "тысяч" in unit:
         return num * 1_000
     return num
 

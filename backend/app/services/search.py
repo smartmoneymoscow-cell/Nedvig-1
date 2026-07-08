@@ -145,11 +145,14 @@ class SearchService:
             func.min(Listing.price).label("min_price"),
             func.max(Listing.price).label("max_price"),
             func.avg(Listing.area_m2).label("avg_area"),
-            func.avg(Listing.price / Listing.area_m2).label("avg_price_per_m2"),
+            func.avg(Listing.price / Listing.area_m2).label("avg_price_per_m2"),  # safe: area_m2 can be NULL, avg skips NULLs
         ).where(Listing.is_active == True)
 
         if city:
             base = base.where(Listing.city == city)
+
+        # Guard against zero area_m2 (avg of NULL is NULL, but explicit filter is safer)
+        base = base.where(Listing.area_m2 > 0)
 
         base = base.group_by(Listing.deal_type, Listing.property_type)
         result = await self.db.execute(base)

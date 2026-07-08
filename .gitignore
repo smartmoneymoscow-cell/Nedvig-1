@@ -34,3 +34,4 @@ out/
 htmlcov/
 
 docker-compose.override.yml
+push.sh

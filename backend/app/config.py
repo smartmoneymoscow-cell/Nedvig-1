@@ -14,11 +14,11 @@ class Settings(BaseSettings):
     ES_URL: str = ""
     ES_INDEX: str = "listings"
 
-    # CORS
-    CORS_ORIGINS: list[str] = ["*"]
+    # CORS — locked to specific origins by default
+    CORS_ORIGINS: list[str] = ["https://nedvig.ru", "http://localhost:3000"]
 
-    # Auth
-    SECRET_KEY: str = "change-me-in-production"
+    # Auth — generate a real key for production!
+    SECRET_KEY: str = "CHANGE-ME-IN-PRODUCTION"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_MINUTES: int = 60
 

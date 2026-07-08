@@ -8,6 +8,7 @@ from app.models.database import get_db
 from app.models.listing import Listing, PropertyType, DealType
 from app.services.search import SearchService, SearchFilters
 from app.ai.agent import AIAgent
+from app.services.auth import require_admin
 
 router = APIRouter()
 agent = AIAgent()
@@ -170,6 +171,7 @@ async def compare_cities(
 async def trigger_scrape(
     body: dict,
     db: AsyncSession = Depends(get_db),
+    _admin=Depends(require_admin),
 ):
     """Trigger scraping for a city."""
     from app.scrapers.runner import ScraperRunner
@@ -226,7 +228,10 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
 # ─── Seed Data (one-time) ─────────────────────────────────────
 
 @router.post("/api/admin/seed")
-async def seed_data(db: AsyncSession = Depends(get_db)):
+async def seed_data(
+    db: AsyncSession = Depends(get_db),
+    _admin=Depends(require_admin),
+):
     """Populate database with sample listings. Idempotent."""
     # Check if already seeded
     count = (await db.execute(select(func.count(Listing.id)))).scalar()

@@ -175,8 +175,8 @@ class IngestionPipeline:
             lon=item.lon,
             title=getattr(item, "title", None) or (item.description[:200] if item.description else None),
             description=item.description,
-            images=str(item.images) if item.images else "[]",
-            features=str(item.features) if item.features else "{}",
+            images=item.images if isinstance(item.images, list) else [],
+            features=item.features if isinstance(item.features, dict) else {},
         )
         self.db.add(listing)
         self.stats["new"] += 1
