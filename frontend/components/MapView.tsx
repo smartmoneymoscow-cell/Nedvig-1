@@ -6,10 +6,10 @@ import 'leaflet/dist/leaflet.css';
 
 interface Listing {
   id: string; source: string; source_url: string; property_type: string;
-  deal_type: string; price: number; area_m2: number | null;
+  deal_type: string; price: number; currency: string; area_m2: number | null;
   rooms: number | null; floor: number | null; floors_total: number | null;
-  address: string; city: string; description: string | null;
-  images: string[]; lat: number | null; lon: number | null;
+  address: string; city: string; district: string | null;
+  description: string | null; images: string[]; lat: number | null; lon: number | null;
 }
 
 interface MapViewProps {
